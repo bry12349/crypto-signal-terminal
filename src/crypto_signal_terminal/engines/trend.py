@@ -26,18 +26,29 @@ class TrendEngine:
         trend_1h = int(snapshot.features.get("trend_1h", 0))
         setup_15m = int(snapshot.features.get("setup_15m", 0))
         trigger_5m = int(snapshot.features.get("trigger_5m", 0))
-        if trend_4h == 0 or trend_4h != trend_1h or setup_15m == 0:
+        if trend_4h == 0 or trend_4h != trend_1h or setup_15m != trend_4h:
             return None
         direction = Direction.LONG if trend_4h > 0 else Direction.SHORT
         matching_trigger = trigger_5m == trend_4h
+        directional_flow = _decimal(snapshot, "aggressive_flow_imbalance") * Decimal(trend_4h)
+        flow_confirmed = directional_flow >= Decimal("0.10")
+        slippage = _decimal(snapshot, "slippage_bps_1000")
+        liquid_enough = slippage <= Decimal("15")
+        if slippage > Decimal("50"):
+            return None
         evidence = (
             Evidence(code="multi_timeframe", text="4h 与 1h 趋势同向", weight=28),
-            Evidence(code="setup", text="15m 顺势回调结构成立", weight=22),
-            Evidence(code="flow", text="主动订单流支持趋势", weight=18, value=_decimal(snapshot, "aggressive_flow_imbalance")),
+            Evidence(code="setup", text="15m 顺势结构成立", weight=22),
+            Evidence(
+                code="flow" if flow_confirmed else "flow_pending",
+                text="主动订单流支持趋势" if flow_confirmed else "主动订单流尚未确认该方向",
+                weight=18 if flow_confirmed else -12,
+                value=_decimal(snapshot, "aggressive_flow_imbalance"),
+            ),
         )
-        if not matching_trigger:
+        if not matching_trigger or not flow_confirmed or not liquid_enough:
             return Opportunity(
-                id=f"trend:{snapshot.symbol}:{int(snapshot.observed_at.timestamp())}:armed",
+                id=f"trend:{snapshot.symbol}:armed",
                 symbol=snapshot.symbol,
                 source=SourceKind.NATIVE,
                 state=LifecycleState.ARMED,
@@ -47,13 +58,13 @@ class TrendEngine:
                 evidence=evidence,
                 data_health=snapshot.data_health,
                 title="等待顺势回调触发",
-                risk="5m 触发尚未确认",
+                risk="5m 触发、主动订单流或盘口滑点尚未通过",
             )
         flow = abs(_decimal(snapshot, "aggressive_flow_imbalance"))
         order_type = OrderType.MARKET if flow >= Decimal("0.45") else OrderType.LIMIT
         plan = basic_order_plan(snapshot, direction, order_type=order_type, ttl_minutes=5)
         return Opportunity(
-            id=f"trend:{snapshot.symbol}:{int(snapshot.observed_at.timestamp())}:entry",
+            id=f"trend:{snapshot.symbol}:entry",
             symbol=snapshot.symbol,
             source=SourceKind.NATIVE,
             state=LifecycleState.ENTRY_VALID,

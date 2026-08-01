@@ -27,3 +27,31 @@ async def test_scanner_refreshes_native_and_smart_money_opportunities() -> None:
     assert {item.symbol for item in state.opportunities} == {"BTCUSDT", "SOLUSDT"}
     assert state.smart_money[0].symbol == "SOLUSDT"
     assert all(item.signal.account_id != "demo" for item in state.confirmations)
+
+
+async def test_partial_watchlist_failure_is_visible_as_degraded() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            if symbol == "ETHUSDT":
+                raise RuntimeError("upstream timeout")
+            return _market(
+                symbol, "67000", trend_4h=1, trend_1h=1, setup_15m=1,
+                trigger_5m=1, aggressive_flow_imbalance="0.6",
+            )
+
+    state = build_demo_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT", "ETHUSDT"))
+    assert await scanner.scan_once() == 1
+    assert state.market_health == "degraded"
+
+
+async def test_stale_exchange_timestamps_cannot_report_healthy_market() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            current = _market(symbol, "67000", trend_4h=1, trend_1h=1, setup_15m=1)
+            return current.model_copy(update={"data_health": current.data_health.model_copy(update={"healthy": False})})
+
+    state = build_demo_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT",))
+    assert await scanner.scan_once() == 1
+    assert state.market_health == "degraded"

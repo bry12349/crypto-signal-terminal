@@ -7,6 +7,8 @@ export function TelegramOnboarding() {
   const [active, setActive] = useState<Integration>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [qrImage, setQrImage] = useState<string | null>(null);
+  const [passwordRequired, setPasswordRequired] = useState(false);
+  const [telegramPassword, setTelegramPassword] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -50,6 +52,10 @@ export function TelegramOnboarding() {
       if (result.status === "authorized") {
         setQrImage(null);
         setMessage("Telegram 已授权，正在同步置顶频道");
+      } else if (result.status === "password_required") {
+        setQrImage(null);
+        setPasswordRequired(true);
+        setMessage("账号已启用两步验证，请输入 Telegram 云密码");
       } else if (result.status === "expired" || result.status === "error") {
         setQrImage(null);
         setMessage("二维码已失效，请重新生成");
@@ -57,6 +63,27 @@ export function TelegramOnboarding() {
     }, 1500);
     return () => window.clearInterval(timer);
   }, [qrImage]);
+
+  async function submitPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const response = await fetch("http://127.0.0.1:8765/api/v1/telegram/login/password", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: telegramPassword }),
+    });
+    setTelegramPassword("");
+    if (!response.ok) {
+      setMessage("云密码验证失败");
+      return;
+    }
+    const result = await response.json() as { status: string };
+    if (result.status === "authorized") {
+      setPasswordRequired(false);
+      setMessage("Telegram 已授权，正在同步置顶频道");
+    } else {
+      setMessage("云密码不正确，请重试");
+    }
+  }
 
   return (
     <section className="integration-drawer">
@@ -85,6 +112,7 @@ export function TelegramOnboarding() {
         </form>
       )}
       {qrImage && <div className="telegram-qr"><img src={qrImage} alt="Telegram 登录二维码" /><span>二维码约 2 分钟内有效</span></div>}
+      {passwordRequired && <form className="credential-form" onSubmit={submitPassword}><label>Telegram 云密码<input aria-label="Telegram 云密码" type="password" value={telegramPassword} onChange={(event) => setTelegramPassword(event.target.value)} autoComplete="off" required /></label><button className="save-credentials" type="submit">完成两步验证</button></form>}
       {message && <div className="save-message">{message}</div>}
       <footer><KeyRound size={14} />敏感输入保存后会立即从表单清除</footer>
     </section>

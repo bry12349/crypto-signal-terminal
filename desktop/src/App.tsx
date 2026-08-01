@@ -9,22 +9,28 @@ import { TelegramOnboarding } from "./components/TelegramOnboarding";
 import { useTerminalStore } from "./store";
 
 export default function App() {
-  const { opportunities, health, connected, selectedId, select, load } = useTerminalStore();
+  const { snapshot, opportunities, health, connected, selectedId, select, load, connectEvents } = useTerminalStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const selected = useMemo(() => opportunities.find((item) => item.id === selectedId) ?? null, [opportunities, selectedId]);
 
-  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 5000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => {
+    void load();
+    const disconnect = connectEvents();
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => { window.clearInterval(timer); disconnect(); };
+  }, [connectEvents, load]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!opportunities.length) return;
       const index = Math.max(0, opportunities.findIndex((item) => item.id === selectedId));
       if (event.key.toLowerCase() === "j") select(opportunities[Math.min(opportunities.length - 1, index + 1)].id);
       if (event.key.toLowerCase() === "k") select(opportunities[Math.max(0, index - 1)].id);
+      if (event.key === "Enter" && selected?.order_plan) window.dispatchEvent(new Event("prepare-order"));
       if (event.key === "Escape") setSettingsOpen(false);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [opportunities, select, selectedId]);
+  }, [opportunities, select, selected, selectedId]);
 
   return (
     <div className="terminal">
@@ -40,7 +46,7 @@ export default function App() {
       </nav>
       <div className="workspace">
         <OpportunityStream items={opportunities} selectedId={selectedId} onSelect={select} />
-        <SignalCanvas selected={selected} />
+        <SignalCanvas selected={selected} mode={snapshot.mode} candles={selected ? snapshot.candles?.[selected.symbol] ?? [] : []} />
         <OrderTicket opportunity={selected} />
       </div>
       <footer className="shortcut-bar"><span><kbd>J</kbd><kbd>K</kbd> 切换机会</span><span><kbd>Space</kbd> 展开证据</span><span><kbd>Enter</kbd> 准备订单</span><strong>只在结构完整时发出信号</strong></footer>

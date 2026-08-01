@@ -1,10 +1,11 @@
 import json
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 
 from crypto_signal_terminal.api import ApplicationState, create_app
 from crypto_signal_terminal.config import MemorySecretStore
-from crypto_signal_terminal.main import build_demo_state, parent_is_gone, parse_args, run_demo_replay
+from crypto_signal_terminal.main import build_demo_state, build_live_state, parent_is_gone, parse_args, run_demo_replay
 
 
 def test_snapshot_exposes_all_signal_paths_without_secrets() -> None:
@@ -44,7 +45,7 @@ def test_same_demo_replay_produces_same_ids() -> None:
 
 def test_paper_order_endpoint_records_complete_plan() -> None:
     state = build_demo_state()
-    client = TestClient(create_app(state))
+    client = TestClient(create_app(state, clock=lambda: state.opportunities[0].updated_at))
     opportunity = next(item for item in state.opportunities if item.order_plan is not None)
     response = client.post("/api/v1/paper-orders", json={"opportunity_id": opportunity.id})
     assert response.status_code == 201
@@ -55,6 +56,27 @@ def test_paper_order_endpoint_records_complete_plan() -> None:
 def test_unknown_paper_order_is_not_found() -> None:
     client = TestClient(create_app(build_demo_state()))
     assert client.post("/api/v1/paper-orders", json={"opportunity_id": "missing"}).status_code == 404
+
+
+def test_expired_paper_order_requires_fresh_analysis() -> None:
+    state = build_demo_state()
+    opportunity = next(item for item in state.opportunities if item.order_plan is not None)
+    client = TestClient(create_app(state, clock=lambda: opportunity.order_plan.expires_at + timedelta(seconds=1)))
+    response = client.post("/api/v1/paper-orders", json={"opportunity_id": opportunity.id})
+    assert response.status_code == 409
+    assert "expired" in response.json()["detail"].lower()
+
+
+def test_event_broadcast_reaches_every_subscriber() -> None:
+    import asyncio
+
+    state = ApplicationState()
+    first: asyncio.Queue = asyncio.Queue()
+    second: asyncio.Queue = asyncio.Queue()
+    state.subscribers.update((first, second))
+    state.publish({"type": "test"})
+    assert first.get_nowait() == {"type": "test"}
+    assert second.get_nowait() == {"type": "test"}
 
 
 def test_local_desktop_origin_is_allowed() -> None:
@@ -93,3 +115,11 @@ def test_telegram_qr_login_requires_saved_credentials() -> None:
 def test_sidecar_detects_reparenting_after_desktop_exit() -> None:
     assert parent_is_gone(initial_parent=400, current_parent=1) is True
     assert parent_is_gone(initial_parent=400, current_parent=400) is False
+
+
+def test_live_startup_never_contains_demo_trades() -> None:
+    state = build_live_state()
+    assert state.mode == "live"
+    assert state.opportunities == []
+    assert state.confirmations == []
+    assert state.market_health == "connecting"

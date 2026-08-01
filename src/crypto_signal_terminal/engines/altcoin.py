@@ -33,6 +33,7 @@ class AltcoinEngine:
         oi = _d(snapshot, "oi_change_ratio")
         flow = _d(snapshot, "aggressive_flow_imbalance")
         depth = _d(snapshot, "depth_imbalance")
+        slippage = _d(snapshot, "slippage_bps_1000")
         if atr > Decimal("25") or volume < Decimal("1.5") or abs(oi) < Decimal("0.03"):
             return None
         direction = Direction.LONG if flow + depth >= 0 else Direction.SHORT
@@ -44,12 +45,13 @@ class AltcoinEngine:
             Evidence(code="oi_acceleration", text="持仓量在扩张前明显加速", weight=24, value=oi),
             Evidence(code="microstructure", text="主动成交与盘口失衡方向一致", weight=22, value=flow + depth),
         )
-        state = LifecycleState.ENTRY_VALID if trigger_matches and cross_exchange else LifecycleState.ARMED
+        liquid_enough = slippage <= Decimal("15")
+        state = LifecycleState.ENTRY_VALID if trigger_matches and cross_exchange and liquid_enough else LifecycleState.ARMED
         plan = None
         if state is LifecycleState.ENTRY_VALID:
             plan = basic_order_plan(snapshot, direction, order_type=OrderType.MARKET, ttl_minutes=3)
         return Opportunity(
-            id=f"alt:{snapshot.symbol}:{int(snapshot.observed_at.timestamp())}:{state.value.lower()}",
+            id=f"alt:{snapshot.symbol}:{state.value.lower()}",
             symbol=snapshot.symbol,
             source=SourceKind.NATIVE,
             state=state,
@@ -60,5 +62,5 @@ class AltcoinEngine:
             data_health=snapshot.data_health,
             order_plan=plan,
             title="临界起爆" if direction is Direction.LONG else "临界瀑布",
-            risk=None if cross_exchange else "等待跨交易所价格确认",
+            risk=None if cross_exchange and liquid_enough else "等待跨交易所价格确认或盘口滑点恢复",
         )

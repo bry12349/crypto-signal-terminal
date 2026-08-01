@@ -49,6 +49,7 @@ class LiveMarketScanner:
         opportunities = []
         smart_money = []
         for snapshot in snapshots:
+            self.state.market_candles[snapshot.symbol] = [item.model_dump(mode="json") for item in snapshot.candles]
             opportunity = self.trend.evaluate(snapshot) if snapshot.symbol in {"BTCUSDT", "ETHUSDT"} else self.altcoin.evaluate(snapshot)
             candidate = self.smart.evaluate_flow(snapshot)
             if opportunity:
@@ -60,12 +61,12 @@ class LiveMarketScanner:
         self.state.confirmations = [
             item for item in self.state.confirmations if item.signal.account_id != "demo"
         ]
-        self.state.market_health = "healthy"
+        all_sources_healthy = len(snapshots) == len(self.watchlist) and all(
+            snapshot.data_health.healthy for snapshot in snapshots
+        )
+        self.state.market_health = "healthy" if all_sources_healthy else "degraded"
         self.state.mode = "live"
-        try:
-            self.state.event_queue.put_nowait({"type": "snapshot", "payload": self.state.snapshot()})
-        except asyncio.QueueFull:
-            pass
+        self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
         return len(snapshots)
 
     async def run(self, stop: asyncio.Event) -> None:

@@ -1,6 +1,5 @@
 import { create } from "zustand";
 
-import { demoSnapshot } from "./demo";
 import type { Health, Opportunity, Snapshot } from "./types";
 
 const API = "http://127.0.0.1:8765";
@@ -42,16 +41,53 @@ interface TerminalStore {
   selectedId: string | null;
   connected: boolean;
   load: () => Promise<void>;
+  connectEvents: () => () => void;
   select: (id: string) => void;
 }
 
 export const useTerminalStore = create<TerminalStore>((set) => ({
-  snapshot: demoSnapshot,
-  opportunities: mergeSignalPaths(demoSnapshot),
+  snapshot: { mode: "live", opportunities: [], smart_money: [], confirmations: [], candles: {} },
+  opportunities: [],
   health: { mode: "demo", market: "healthy", telegram: "not_configured", bot: "not_configured", dune: "not_configured" },
-  selectedId: demoSnapshot.opportunities[1]?.id ?? demoSnapshot.opportunities[0]?.id ?? null,
+  selectedId: null,
   connected: false,
   select: (id) => set({ selectedId: id }),
+  connectEvents: () => {
+    let socket: WebSocket | null = null;
+    let retryTimer: number | null = null;
+    let attempt = 0;
+    let stopped = false;
+    const connect = () => {
+      if (stopped) return;
+      socket = new WebSocket("ws://127.0.0.1:8765/api/v1/events");
+      socket.onopen = () => { attempt = 0; set({ connected: true }); };
+      socket.onmessage = (message) => {
+        const event = JSON.parse(String(message.data)) as { type: string; payload: Snapshot };
+        if (event.type !== "snapshot") return;
+        const snapshot = event.payload;
+        const opportunities = mergeSignalPaths(snapshot);
+        set((state) => ({
+          snapshot,
+          opportunities,
+          selectedId: opportunities.some((item) => item.id === state.selectedId) ? state.selectedId : opportunities[0]?.id ?? null,
+        }));
+      };
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        set({ connected: false });
+        if (stopped) return;
+        const delay = Math.min(10_000, 500 * (2 ** attempt));
+        attempt += 1;
+        retryTimer = window.setTimeout(connect, delay);
+      };
+    };
+    connect();
+    return () => {
+      stopped = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      socket?.close();
+    };
+  },
   load: async () => {
     try {
       const [snapshotResponse, healthResponse] = await Promise.all([fetch(`${API}/api/v1/snapshot`), fetch(`${API}/api/v1/health`)]);
@@ -67,7 +103,7 @@ export const useTerminalStore = create<TerminalStore>((set) => ({
         selectedId: opportunities.some((item) => item.id === state.selectedId) ? state.selectedId : opportunities[0]?.id ?? null,
       }));
     } catch {
-      set({ connected: false });
+      set({ connected: false, opportunities: [], selectedId: null });
     }
   },
 }));

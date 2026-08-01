@@ -6,13 +6,13 @@
 
 - BTC / ETH 日内趋势跟随：4h 与 1h 定方向，15m 建立结构，5m 触发入场。
 - 山寨币临界雷达：寻找低波动压缩、成交放大、OI 加速和盘口/主动流同向的起爆或瀑布前状态。
-- 聪明钱候选：只有大额订单流跨窗口持续、OI 同时增长且形成价格冲击或吸收时才显示；不会把单笔大单直接称为聪明钱。
-- Telegram 二次确认：本机二维码登录用户账号，自动发现全部置顶频道，监听新消息、编辑和删除；收到交易信号后立即重新拉取公开市场数据并独立计算结论。
+- 聪明钱候选：使用绝对美元门槛识别大额成交，并要求订单流跨窗口持续、OI 同时增长且形成价格冲击或吸收；不会把单笔大单或固定分位数直接称为聪明钱。
+- Telegram 二次确认：本机二维码登录用户账号（支持两步验证），自动发现全部置顶频道，回补离线消息并监听新消息、编辑和删除；收到交易信号后立即重新拉取公开市场数据并独立计算结论，源消息删除会撤销订单建议。
 - 手机回推：通过 Telegram Bot 返回确认/条件确认/拒绝/过期结论，以及重新计算的入场、止损、分批止盈、盈亏比和有效期。
 - 订单建议：给出市价单、限价单或止损市价触发建议和固定风险仓位；v0.1.0 只准备模拟订单，不连接交易所私钥，也不会自动提交真实订单。
-- 本地安全：Telegram API Hash、StringSession、Bot Token 和 Dune Key 保存到 macOS 钥匙串，不进入前端状态、日志、回放或 Git。
+- 本地安全：Telegram API Hash、StringSession、Bot Token、Dune Key 和审计加密密钥保存到 macOS 钥匙串；Telegram 原文以加密形式写入本地审计库，不进入前端状态、明文日志或 Git。
 
-行情取自公开 API。Bybit 提供合约价格、K 线、盘口、主动成交和 OI，OKX 用于跨交易所价格确认；Dune 是可选的链上钱包候选来源。
+默认启动即为实盘公开行情模式，断网时保持空状态，不用模拟走势替代真实行情。Bybit 提供合约价格、真实 5m K 线、独立 4h/1h/15m 周期、盘口、主动成交和 OI，OKX 用于跨交易所价格确认。Dune 凭据与查询适配器已预留，但 v0.1.0 尚未加入后台调度；当前“聪明钱”来自合约大额订单流，不把未运行的 Dune 连接显示为健康。
 
 ## 本地开发
 
@@ -22,6 +22,8 @@ cd /Users/a0000/crypto-signal-terminal
 ./scripts/run-demo.sh
 ```
 
+上面的脚本会显式进入可复现演示模式；正常桌面应用不会自动载入演示机会。
+
 另一个终端启动界面：
 
 ```bash
@@ -29,7 +31,7 @@ cd /Users/a0000/crypto-signal-terminal/desktop
 pnpm dev
 ```
 
-打开设置，保存 Telegram API ID / API Hash 后，软件会生成一次性二维码。用 Telegram 手机端进入“设置 → 设备 → 连接桌面设备”扫码。再配置 Bot Token 和接收消息的 Chat ID，即可启用手机回推。
+打开设置，保存 Telegram API ID / API Hash 后，软件会生成一次性二维码。用 Telegram 手机端进入“设置 → 设备 → 连接桌面设备”扫码；若账号启用了两步验证，再输入 Telegram 云密码（只用于本次授权，不保存）。配置 Bot Token 和接收消息的 Chat ID 后即可启用手机回推。
 
 ## 构建 macOS 应用
 
@@ -40,7 +42,7 @@ cd desktop
 pnpm tauri build
 ```
 
-构建产物位于 `desktop/src-tauri/target/release/bundle/`。当前构建目标为 Apple Silicon macOS。
+构建产物位于 `desktop/src-tauri/target/release/bundle/`。当前构建目标为 Apple Silicon macOS，并采用本机临时签名；尚未使用 Apple Developer ID 公证，因此适合本机安装测试，不是面向外部用户的公证发行包。
 
 ## 风险边界
 

@@ -192,6 +192,15 @@ class ConfirmationResult(FrozenModel):
     community_plan: OrderPlan | None = None
 
 
+class Candle(FrozenModel):
+    timestamp: int = Field(gt=0)
+    open: Decimal = Field(gt=0)
+    high: Decimal = Field(gt=0)
+    low: Decimal = Field(gt=0)
+    close: Decimal = Field(gt=0)
+    volume: Decimal = Field(ge=0)
+
+
 class MarketSnapshot(FrozenModel):
     symbol: str
     exchange: str
@@ -205,6 +214,7 @@ class MarketSnapshot(FrozenModel):
     features: dict[str, Decimal | int | bool | str] = Field(default_factory=dict)
     data_health: DataHealth
     peer_confirmations: int = Field(default=1, ge=0)
+    candles: tuple[Candle, ...] = ()
 
 
 JsonValue = Annotated[dict[str, Any], Field(default_factory=dict)]

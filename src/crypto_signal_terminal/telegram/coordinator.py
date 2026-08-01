@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from crypto_signal_terminal.config import SecretStore
 from crypto_signal_terminal.confirmation import ConfirmationEngine
-from crypto_signal_terminal.domain.models import ConfirmationResult, MarketSnapshot
+from crypto_signal_terminal.domain.models import ConfirmationResult, MarketSnapshot, Verdict
 from crypto_signal_terminal.storage import AuditStore
 from crypto_signal_terminal.telegram.client import PinnedChannelMonitor, TelegramUpdate
 from crypto_signal_terminal.telegram.parser import parse_signal
@@ -40,23 +40,50 @@ class TelegramSignalCoordinator:
     async def process_update(self, update: TelegramUpdate) -> ConfirmationResult | None:
         if update.kind == "deleted":
             self.store.mark_message_deleted("telegram-user", update.channel_id, update.message_id, update.observed_at)
+            invalidated: list[ConfirmationResult] = []
+            retained: list[ConfirmationResult] = []
+            for item in self.state.confirmations:
+                if item.signal.channel_id == update.channel_id and item.signal.message_id == update.message_id:
+                    item = item.model_copy(update={
+                        "verdict": Verdict.REJECTED,
+                        "reason_codes": ("source_message_deleted",),
+                        "order_plan": None,
+                        "community_plan": None,
+                        "analyzed_at": update.observed_at,
+                    })
+                    invalidated.append(item)
+                retained.append(item)
+            self.state.confirmations = retained
+            self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
+            notifier = self.notifier_factory() if self.notifier_factory else None
+            if notifier is not None:
+                for item in invalidated:
+                    await notifier.send(item)
             return None
         if not update.text:
+            self.store.update_channel_offset("telegram-user", update.channel_id, update.message_id)
             return None
+        previous_offset = self.store.channel_offset("telegram-user", update.channel_id)
         is_new_version = self.store.record_message_version(
             "telegram-user", update.channel_id, update.message_id, update.text, update.observed_at,
         )
-        if not is_new_version:
+        if not is_new_version and update.message_id <= previous_offset:
             return None
+        if update.kind == "edited":
+            self.state.confirmations = [
+                item for item in self.state.confirmations
+                if not (item.signal.channel_id == update.channel_id and item.signal.message_id == update.message_id)
+            ]
         signal = parse_signal(
             update.text,
             account_id="telegram-user",
             channel_id=update.channel_id,
             message_id=update.message_id,
-            published_at=update.observed_at,
+            published_at=update.published_at or update.observed_at,
             edited_at=update.edited_at,
         )
         if signal.symbol is None or signal.direction is None:
+            self.store.update_channel_offset("telegram-user", update.channel_id, update.message_id)
             return None
         try:
             snapshot = await self.market.snapshot(signal.symbol)
@@ -64,16 +91,15 @@ class TelegramSignalCoordinator:
             self.state.market_health = "degraded"
             return None
         self.state.market_health = "healthy"
+        self.state.market_candles[snapshot.symbol] = [item.model_dump(mode="json") for item in snapshot.candles]
         result = self.confirmation.confirm(signal, snapshot, analyzed_at=self.clock())
         self.state.confirmations.insert(0, result)
         del self.state.confirmations[100:]
-        try:
-            self.state.event_queue.put_nowait({"type": "confirmation", "payload": result.model_dump(mode="json")})
-        except asyncio.QueueFull:
-            pass
+        self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
         notifier = self.notifier_factory() if self.notifier_factory else None
         if notifier is not None:
             await notifier.send(result)
+        self.store.update_channel_offset("telegram-user", update.channel_id, update.message_id)
         return result
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -98,6 +124,10 @@ class TelegramSignalCoordinator:
                     {"id": item.peer_id, "title": item.title, "enabled": True} for item in channels
                 ]
                 monitor.install_handlers()
+                last_message_ids = {
+                    item.peer_id: self.store.channel_offset("telegram-user", item.peer_id) for item in channels
+                }
+                await monitor.backfill_recent(last_message_ids)
                 self.state.telegram_authorized = True
                 while not stop.is_set():
                     try:

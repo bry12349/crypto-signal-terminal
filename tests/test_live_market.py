@@ -17,12 +17,12 @@ def _response(request: httpx.Request) -> httpx.Response:
         for index in range(24):
             close = 100 - index if interval == "60" else 100 - index * 0.1
             volume = 40 if index == 0 else 10
-            rows.append([str(1000 - index), str(close - 0.2), str(close + 0.4), str(close - 0.4), str(close), str(volume), "1000"])
+            rows.append([str(1_700_000_000_000 - index * 300_000), str(close - 0.2), str(close + 0.4), str(close - 0.4), str(close), str(volume), "1000"])
         result = {"list": rows}
     elif path.endswith("/orderbook"):
-        result = {"b": [["99.9", "80"]], "a": [["100.1", "20"]]}
+        result = {"b": [["99.95", "80"]], "a": [["100.04", "20"]]}
     elif path.endswith("/recent-trade"):
-        result = {"list": [{"side": "Buy", "size": "10", "price": "100"}] * 8 + [{"side": "Sell", "size": "1", "price": "99.9"}] * 2}
+        result = {"list": [{"side": "Buy", "size": "2000", "price": "100"}] * 8 + [{"side": "Sell", "size": "1", "price": "99.9"}] * 2}
     elif path.endswith("/open-interest"):
         result = {"list": [{"openInterest": "1100"}, {"openInterest": "1000"}]}
     else:
@@ -40,4 +40,26 @@ async def test_live_market_snapshot_derives_flow_trend_depth_and_oi() -> None:
     assert Decimal(str(snapshot.features["depth_imbalance"])) > 0
     assert Decimal(str(snapshot.features["aggressive_flow_imbalance"])) > Decimal("0.5")
     assert Decimal(str(snapshot.features["oi_change_ratio"])) == Decimal("0.1")
+    assert snapshot.features["large_trade_count"] == 8
+    assert Decimal(str(snapshot.features["slippage_bps_1000"])) <= Decimal("15")
     assert snapshot.data_health.healthy is True
+    assert len(snapshot.candles) == 24
+    assert snapshot.candles[-1].close == Decimal("100")
+
+
+@pytest.mark.asyncio
+async def test_exchange_timestamp_marks_old_market_data_unhealthy() -> None:
+    def stale_response(request: httpx.Request) -> httpx.Response:
+        response = _response(request)
+        payload = response.json()
+        payload["time"] = 1_700_000_000_000
+        return httpx.Response(200, json=payload, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(stale_response), base_url="https://api.bybit.com") as http:
+        snapshot = await BybitCompositeMarketClient(
+            client=http,
+            clock=lambda: datetime(2026, 8, 1, tzinfo=UTC),
+            include_peers=False,
+        ).snapshot("SOLUSDT")
+    assert snapshot.data_health.healthy is False
+    assert snapshot.data_health.stale_sources == ("bybit_ticker",)

@@ -41,19 +41,19 @@ def signal(**updates) -> TelegramSignal:
     return TelegramSignal(**payload)
 
 
-def market(*, price: str = "146.35", healthy: bool = True, **features) -> MarketSnapshot:
+def market(*, price: str = "146.35", healthy: bool = True, peer_confirmations: int = 3, funding_rate: str = "0.0001", latency_ms: int = 0, spread: str = "0.02", **features) -> MarketSnapshot:
     return MarketSnapshot(
         symbol="SOLUSDT",
         exchange="composite",
         observed_at=NOW,
         price=Decimal(price),
-        bid=Decimal(price) - Decimal("0.02"),
-        ask=Decimal(price) + Decimal("0.02"),
+        bid=Decimal(price) - Decimal(spread),
+        ask=Decimal(price) + Decimal(spread),
         open_interest=Decimal("900000"),
-        funding_rate=Decimal("0.0001"),
+        funding_rate=Decimal(funding_rate),
         volume_24h=Decimal("100000000"),
-        peer_confirmations=3,
-        data_health=DataHealth(healthy=healthy, observed_at=NOW, stale_sources=() if healthy else ("ticker",)),
+        peer_confirmations=peer_confirmations,
+        data_health=DataHealth(healthy=healthy, observed_at=NOW, latency_ms=latency_ms, stale_sources=() if healthy else ("ticker",)),
         features={"spread_bps": "3", "aggressive_flow_imbalance": "-0.65", "oi_change_ratio": "0.07", "trend_1h": -1, **features},
     )
 
@@ -65,6 +65,9 @@ def test_order_planner_uses_fixed_risk_budget() -> None:
     assert plan.direction is Direction.SHORT
     assert plan.order_type is OrderType.LIMIT
     assert plan.suggested_quantity > 0
+    midpoint = (plan.entry_low + plan.entry_high) / Decimal("2")
+    stop_loss = abs(midpoint - plan.stop) * plan.suggested_quantity
+    assert stop_loss + plan.estimated_fees < plan.risk_amount
 
 
 def test_order_planner_rejects_stop_on_wrong_side() -> None:
@@ -99,6 +102,26 @@ def test_aligned_signal_is_confirmed_with_recommended_plan() -> None:
     assert result.verdict is Verdict.CONFIRMED
     assert result.order_plan is not None
     assert result.confidence >= 75
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "reason"),
+    [
+        (market(peer_confirmations=1), None),
+        (market(funding_rate="0.004"), "extreme_funding"),
+        (market(latency_ms=6000), "market_latency_too_high"),
+        (market(spread="0.30"), "spread_too_wide"),
+        (market(slippage_bps_1000="22"), "slippage_too_high"),
+        (market(depth_imbalance="0.8"), "directional_depth_opposes_signal"),
+    ],
+)
+def test_confirmation_requires_liquid_fresh_cross_checked_market(snapshot: MarketSnapshot, reason: str | None) -> None:
+    result = ConfirmationEngine().confirm(signal(), snapshot, analyzed_at=NOW)
+    if reason is None:
+        assert result.verdict is Verdict.CONDITIONAL
+    else:
+        assert result.verdict is Verdict.REJECTED
+        assert reason in result.reason_codes
 
 
 @pytest.mark.asyncio

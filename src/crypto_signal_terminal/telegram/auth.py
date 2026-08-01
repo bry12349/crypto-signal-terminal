@@ -8,6 +8,7 @@ from typing import Any, Callable
 import qrcode
 import qrcode.image.svg
 from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
 
 from crypto_signal_terminal.config import SecretStore
@@ -42,6 +43,7 @@ class TelegramLoginManager:
         self._qr_image: str | None = None
         self._error: str | None = None
         self._task: asyncio.Task[None] | None = None
+        self._pending_client: Any | None = None
 
     async def start(self) -> dict[str, str | None]:
         if self._task and not self._task.done():
@@ -73,6 +75,11 @@ class TelegramLoginManager:
             self.secrets.set("telegram_session", client.session.save())
             self._status = "authorized"
             self._qr_image = None
+        except SessionPasswordNeededError:
+            self._status = "password_required"
+            self._qr_image = None
+            self._pending_client = client
+            return
         except asyncio.TimeoutError:
             self._status = "expired"
             self._qr_image = None
@@ -81,7 +88,26 @@ class TelegramLoginManager:
             self._error = type(exc).__name__
             self._qr_image = None
         finally:
-            await client.disconnect()
+            if self._status != "password_required":
+                await client.disconnect()
+
+    async def complete_password(self, password: str) -> dict[str, str | None]:
+        client = self._pending_client
+        if client is None or self._status != "password_required":
+            raise ValueError("telegram_password_not_expected")
+        try:
+            await client.sign_in(password=password)
+            self.secrets.set("telegram_session", client.session.save())
+            self._status = "authorized"
+            self._error = None
+        except Exception as exc:
+            self._status = "password_required"
+            self._error = type(exc).__name__
+        finally:
+            if self._status == "authorized":
+                await client.disconnect()
+                self._pending_client = None
+        return self.status()
 
     async def wait(self) -> None:
         if self._task:

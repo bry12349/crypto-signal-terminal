@@ -50,6 +50,25 @@ def test_trend_engine_does_not_trade_conflicting_timeframes() -> None:
     assert result is None
 
 
+def test_trend_trigger_waits_when_order_flow_opposes_direction() -> None:
+    result = TrendEngine().evaluate(
+        snapshot(trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1, aggressive_flow_imbalance="-0.3")
+    )
+    assert result is not None
+    assert result.state is LifecycleState.ARMED
+    assert result.order_plan is None
+
+
+def test_native_trend_never_enters_through_excessive_slippage() -> None:
+    result = TrendEngine().evaluate(snapshot(
+        trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1,
+        aggressive_flow_imbalance="0.6", slippage_bps_1000="22",
+    ))
+    assert result is not None
+    assert result.state is LifecycleState.ARMED
+    assert result.order_plan is None
+
+
 def test_altcoin_compression_without_trigger_is_forming() -> None:
     result = AltcoinEngine().evaluate(
         snapshot(
@@ -89,3 +108,15 @@ def test_altcoin_illiquid_contract_is_excluded() -> None:
         snapshot(symbol="TINYUSDT", atr_percentile=8, volume_acceleration="3", oi_change_ratio="0.1", spread_bps="45")
     )
     assert result is None
+
+
+def test_altcoin_trigger_waits_when_orderbook_slippage_is_excessive() -> None:
+    result = AltcoinEngine().evaluate(snapshot(
+        symbol="SUIUSDT", atr_percentile=10, volume_acceleration="2.2",
+        oi_change_ratio="0.08", aggressive_flow_imbalance="-0.6",
+        depth_imbalance="-0.45", trigger_5m=-1, spread_bps="8",
+        slippage_bps_1000="24",
+    ))
+    assert result is not None
+    assert result.state is LifecycleState.ARMED
+    assert result.order_plan is None

@@ -1,4 +1,5 @@
 import asyncio
+from telethon.errors import SessionPasswordNeededError
 
 from crypto_signal_terminal.config import MemorySecretStore
 from crypto_signal_terminal.telegram.auth import TelegramLoginManager
@@ -43,5 +44,34 @@ def test_qr_login_saves_only_session_after_authorization() -> None:
         assert manager.status()["status"] == "authorized"
         assert secrets.get("telegram_session") == "authorized-session"
         assert "secret-hash" not in str(started)
+
+    asyncio.run(scenario())
+
+
+def test_qr_login_supports_two_factor_password_without_persisting_it() -> None:
+    class PasswordQr:
+        url = "tg://login?token=2fa"
+        async def wait(self, timeout: int) -> None:
+            raise SessionPasswordNeededError(request=None)
+
+    class PasswordClient(FakeClient):
+        signed_password: str | None = None
+        async def qr_login(self) -> PasswordQr: return PasswordQr()
+        async def sign_in(self, *, password: str) -> None: self.signed_password = password
+
+    async def scenario() -> None:
+        secrets = MemorySecretStore()
+        secrets.set("telegram_api_id", "123")
+        secrets.set("telegram_api_hash", "hash")
+        client = PasswordClient()
+        manager = TelegramLoginManager(secrets, client_factory=lambda *_: client)
+        await manager.start()
+        await manager.wait()
+        assert manager.status()["status"] == "password_required"
+        result = await manager.complete_password("not-stored")
+        assert result["status"] == "authorized"
+        assert client.signed_password == "not-stored"
+        assert secrets.get("not-stored") is None
+        assert secrets.get("telegram_session") == "authorized-session"
 
     asyncio.run(scenario())

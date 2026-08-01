@@ -82,6 +82,10 @@ def build_demo_state() -> ApplicationState:
     )
 
 
+def build_live_state() -> ApplicationState:
+    return ApplicationState(mode="live", market_health="connecting")
+
+
 def run_demo_replay() -> tuple[str, ...]:
     state = build_demo_state()
     ids = [item.id for item in state.opportunities]
@@ -115,11 +119,15 @@ def run() -> None:
     args = parse_args()
     secrets = KeyringSecretStore()
     settings = Settings.from_environment(secrets)
-    state = build_demo_state()
-    state.mode = settings.mode
+    state = build_demo_state() if settings.mode == "demo" else build_live_state()
     state.credentials = settings.credential_status()
+    state.dune_health = "configured_not_running" if state.credentials.get("dune") else "not_configured"
     state.telegram_authorized = bool(secrets.get("telegram_session"))
-    store = AuditStore(settings.runtime_dir.expanduser() / "audit.sqlite3")
+    audit_key = secrets.get("audit_encryption_key")
+    if not audit_key:
+        audit_key = AuditStore.generate_key().decode("ascii")
+        secrets.set("audit_encryption_key", audit_key)
+    store = AuditStore(settings.runtime_dir.expanduser() / "audit.sqlite3", encryption_key=audit_key.encode("ascii"))
 
     def notifier_factory() -> TelegramBotNotifier | None:
         token = secrets.get("telegram_bot_token")
@@ -139,7 +147,10 @@ def run() -> None:
     scanner = LiveMarketScanner(state=state, market=live_market)
 
     async def background(stop):
-        await asyncio.gather(coordinator.run(stop), scanner.run(stop), exit_when_parent_is_gone(stop))
+        services = [exit_when_parent_is_gone(stop)]
+        if settings.mode != "demo":
+            services.extend((coordinator.run(stop), scanner.run(stop)))
+        await asyncio.gather(*services)
 
     uvicorn.run(
         create_app(state, secret_store=secrets, background_runner=background),

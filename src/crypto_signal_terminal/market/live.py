@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import httpx
 
-from crypto_signal_terminal.domain.models import DataHealth, MarketSnapshot
+from crypto_signal_terminal.domain.models import Candle, DataHealth, MarketSnapshot
 
 
 def _d(value: object, default: str = "0") -> Decimal:
@@ -19,6 +19,29 @@ def _d(value: object, default: str = "0") -> Decimal:
 
 def _sign(value: Decimal, threshold: Decimal = Decimal("0")) -> int:
     return 1 if value > threshold else -1 if value < -threshold else 0
+
+
+def _book_slippage_bps(book: dict, reference: Decimal, notional_usd: Decimal = Decimal("1000")) -> Decimal:
+    if reference <= 0:
+        return Decimal("9999")
+    required = notional_usd / reference
+    results: list[Decimal] = []
+    for side in (book.get("a", []), book.get("b", [])):
+        remaining = required
+        cost = Decimal("0")
+        filled = Decimal("0")
+        for row in side:
+            quantity = min(remaining, _d(row[1]))
+            cost += quantity * _d(row[0])
+            filled += quantity
+            remaining -= quantity
+            if remaining <= 0:
+                break
+        if remaining > 0 or filled <= 0:
+            return Decimal("9999")
+        average = cost / filled
+        results.append(abs(average - reference) / reference * Decimal("10000"))
+    return max(results, default=Decimal("9999"))
 
 
 class BybitCompositeMarketClient:
@@ -35,13 +58,13 @@ class BybitCompositeMarketClient:
         self.clock = clock
         self.include_peers = include_peers
 
-    async def _get(self, client: httpx.AsyncClient, path: str, **params: object) -> dict:
+    async def _get(self, client: httpx.AsyncClient, path: str, **params: object) -> tuple[dict, int | None]:
         response = await client.get(path, params=params)
         response.raise_for_status()
         payload = response.json()
         if payload.get("retCode") != 0:
             raise RuntimeError(f"bybit_error:{payload.get('retCode')}")
-        return payload["result"]
+        return payload["result"], int(payload["time"]) if payload.get("time") else None
 
     async def snapshot(self, symbol: str) -> MarketSnapshot:
         normalized = symbol.upper().replace("/", "").replace("-", "")
@@ -49,19 +72,32 @@ class BybitCompositeMarketClient:
         client = self.client or httpx.AsyncClient(base_url="https://api.bybit.com", timeout=7)
         started = self.clock()
         try:
-            ticker, candles_1h, candles_5m, book, trades, oi = await asyncio.gather(
+            responses = await asyncio.gather(
                 self._get(client, "/v5/market/tickers", category="linear", symbol=normalized),
+                self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="240", limit=24),
                 self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="60", limit=24),
+                self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="15", limit=24),
                 self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="5", limit=60),
                 self._get(client, "/v5/market/orderbook", category="linear", symbol=normalized, limit=50),
                 self._get(client, "/v5/market/recent-trade", category="linear", symbol=normalized, limit=200),
                 self._get(client, "/v5/market/open-interest", category="linear", symbol=normalized, intervalTime="5min", limit=2),
             )
-            observed = self.clock()
+            (ticker, ticker_time), (candles_4h, _), (candles_1h, _), (candles_15m, _), (candles_5m, _), (book, _), (trades, _), (oi, _) = responses
+            received_at = self.clock()
+            observed = datetime.fromtimestamp(ticker_time / 1000, tz=UTC) if ticker_time else received_at
             ticker_item = ticker["list"][0]
-            features = self._features(candles_1h["list"], candles_5m["list"], book, trades["list"], oi["list"])
+            features = self._features(candles_4h["list"], candles_1h["list"], candles_15m["list"], candles_5m["list"], book, trades["list"], oi["list"])
+            candle_rows = tuple(
+                Candle(
+                    timestamp=int(row[0]) // 1000,
+                    open=_d(row[1]), high=_d(row[2]), low=_d(row[3]), close=_d(row[4]), volume=_d(row[5]),
+                )
+                for row in reversed(candles_5m["list"])
+            )
             price = _d(ticker_item["lastPrice"])
-            latency_ms = max(0, int((observed - started).total_seconds() * 1000))
+            latency_ms = max(0, int((received_at - started).total_seconds() * 1000))
+            source_age_ms = max(0, int((received_at - observed).total_seconds() * 1000))
+            healthy = latency_ms <= 5000 and source_age_ms <= 10000
             peer_confirmations = 1 + (await self._okx_price_confirms(normalized, price) if self.include_peers else 0)
             return MarketSnapshot(
                 symbol=normalized,
@@ -73,9 +109,16 @@ class BybitCompositeMarketClient:
                 open_interest=_d(ticker_item.get("openInterest")),
                 funding_rate=_d(ticker_item.get("fundingRate")),
                 volume_24h=_d(ticker_item.get("turnover24h")),
-                data_health=DataHealth(healthy=True, observed_at=observed, latency_ms=latency_ms),
+                data_health=DataHealth(
+                    healthy=healthy,
+                    observed_at=observed,
+                    latency_ms=latency_ms,
+                    stale_sources=() if healthy else ("bybit_ticker",),
+                    reason=None if healthy else "exchange timestamp or request latency exceeded limit",
+                ),
                 peer_confirmations=peer_confirmations,
                 features=features,
+                candles=candle_rows,
             )
         finally:
             if owned:
@@ -98,14 +141,18 @@ class BybitCompositeMarketClient:
             return 0
 
     @staticmethod
-    def _features(candles_1h: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict]) -> dict[str, str | int]:
-        hour = list(reversed(candles_1h))
-        five = list(reversed(candles_5m))
+    def _features(candles_4h: list, candles_1h: list, candles_15m: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict]) -> dict[str, str | int]:
+        four = list(reversed(candles_4h))[:-1]
+        hour = list(reversed(candles_1h))[:-1]
+        fifteen = list(reversed(candles_15m))[:-1]
+        five = list(reversed(candles_5m))[:-1]
+        four_closes = [_d(row[4]) for row in four]
         hour_closes = [_d(row[4]) for row in hour]
+        fifteen_closes = [_d(row[4]) for row in fifteen]
         five_closes = [_d(row[4]) for row in five]
         hour_move = hour_closes[-1] - hour_closes[-2] if len(hour_closes) >= 2 else Decimal("0")
-        four_hour_move = hour_closes[-1] - hour_closes[-5] if len(hour_closes) >= 5 else hour_move
-        setup_move = five_closes[-1] - five_closes[-4] if len(five_closes) >= 4 else Decimal("0")
+        four_hour_move = four_closes[-1] - four_closes[-2] if len(four_closes) >= 2 else Decimal("0")
+        setup_move = fifteen_closes[-1] - fifteen_closes[-2] if len(fifteen_closes) >= 2 else Decimal("0")
         trigger_move = five_closes[-1] - five_closes[-2] if len(five_closes) >= 2 else Decimal("0")
 
         bids = sum((_d(row[1]) for row in book.get("b", [])), Decimal("0"))
@@ -126,9 +173,10 @@ class BybitCompositeMarketClient:
         desired = _sign(flow)
         persistence = Decimal(sum(1 for item in chunk_signs if item == desired)) / Decimal(len(chunk_signs) or 1)
 
-        sizes = sorted(_d(item["size"]) for item in trades)
-        threshold = sizes[int((len(sizes) - 1) * 0.75)] if sizes else Decimal("0")
-        large_count = sum(1 for size in sizes if size >= threshold and threshold > 0)
+        notionals = sorted(_d(item["size"]) * _d(item["price"]) for item in trades)
+        baseline_notional = notionals[max(0, int(len(notionals) * 0.1) - 1)] if notionals else Decimal("0")
+        threshold = max(Decimal("100000"), baseline_notional * Decimal("8"))
+        large_count = sum(1 for notional in notionals if notional >= threshold)
 
         oi_values = [_d(item.get("openInterest")) for item in oi_rows]
         oi_ratio = oi_values[0] / oi_values[-1] - 1 if len(oi_values) >= 2 and oi_values[-1] else Decimal("0")
@@ -153,6 +201,8 @@ class BybitCompositeMarketClient:
             "aggressive_flow_imbalance": str(flow.quantize(Decimal("0.0001"))),
             "flow_persistence": str(persistence.quantize(Decimal("0.01"))),
             "large_trade_count": large_count,
+            "large_trade_threshold_usd": str(threshold.quantize(Decimal("0.01"))),
+            "slippage_bps_1000": str(_book_slippage_bps(book, five_closes[-1] if five_closes else Decimal("0")).quantize(Decimal("0.01"))),
             "oi_change_ratio": str(oi_ratio.quantize(Decimal("0.0001"))),
             "atr_percentile": str(atr_percentile.quantize(Decimal("0.1"))),
             "volume_acceleration": str(volume_acceleration.quantize(Decimal("0.01"))),

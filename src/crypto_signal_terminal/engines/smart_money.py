@@ -76,7 +76,7 @@ class SmartMoneyEngine:
         )
         score = min(95, 55 + count * 2 + int(persistence * 20) + int(abs(flow) * 10))
         return SmartMoneyCandidate(
-            id=f"smart-flow:{snapshot.symbol}:{int(snapshot.observed_at.timestamp())}",
+            id=f"smart-flow:{snapshot.symbol}",
             symbol=snapshot.symbol,
             kind=SmartMoneyKind.DERIVATIVES_FLOW,
             direction=direction,

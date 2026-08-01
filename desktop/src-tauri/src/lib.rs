@@ -13,9 +13,21 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let command = app.shell().sidecar("crypto-signal-service")?;
-            let (_events, child) = command.args(service_args()).spawn()?;
-            app.manage(LocalService(Mutex::new(Some(child))));
+            let mut child = None;
+            for attempt in 1..=3 {
+                child = app
+                    .shell()
+                    .sidecar("crypto-signal-service")
+                    .ok()
+                    .and_then(|command| command.args(service_args()).spawn().ok())
+                    .map(|(_events, child)| child);
+                if child.is_some() {
+                    break;
+                }
+                eprintln!("local service failed to start (attempt {attempt}/3)");
+                std::thread::sleep(std::time::Duration::from_millis(250 * attempt));
+            }
+            app.manage(LocalService(Mutex::new(child)));
             Ok(())
         })
         .build(tauri::generate_context!())

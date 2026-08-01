@@ -58,7 +58,7 @@ class Settings:
             return int(raw) if raw else None
 
         return cls(
-            mode=os.getenv("CST_MODE", "demo"),
+            mode=os.getenv("CST_MODE", "live"),
             runtime_dir=Path(os.getenv("CST_RUNTIME_DIR", str(Path.home() / ".crypto-signal-terminal"))),
             telegram_api_id=integer("TELEGRAM_API_ID"),
             telegram_api_hash=text("TELEGRAM_API_HASH", "telegram_api_hash"),

@@ -5,7 +5,7 @@ from crypto_signal_terminal.domain.models import Direction
 from crypto_signal_terminal.api import ApplicationState
 from crypto_signal_terminal.main import _market
 from crypto_signal_terminal.storage import AuditStore
-from crypto_signal_terminal.telegram.client import PinnedDialog, TelegramUpdate, select_monitored_channels
+from crypto_signal_terminal.telegram.client import PinnedDialog, TelegramUpdate, normalize_peer_id, select_monitored_channels
 from crypto_signal_terminal.telegram.coordinator import TelegramSignalCoordinator
 from crypto_signal_terminal.telegram.parser import parse_signal
 
@@ -69,6 +69,10 @@ def test_all_pinned_channels_selected_but_pinned_private_chat_ignored() -> None:
     assert [item.peer_id for item in selected] == [1]
 
 
+def test_telethon_marked_channel_id_matches_dialog_entity_id() -> None:
+    assert normalize_peer_id(-1000000000123) == 123
+
+
 def test_audit_store_deduplicates_same_version_and_keeps_edits(tmp_path) -> None:
     store = AuditStore(tmp_path / "audit.sqlite3")
     first = store.record_message_version("me", 10, 20, "BTC long", NOW)
@@ -78,6 +82,30 @@ def test_audit_store_deduplicates_same_version_and_keeps_edits(tmp_path) -> None
     assert duplicate is False
     assert edited is True
     assert len(store.message_versions("me", 10, 20)) == 2
+
+
+def test_private_channel_text_is_encrypted_at_rest(tmp_path) -> None:
+    path = tmp_path / "audit.sqlite3"
+    store = AuditStore(path, encryption_key=AuditStore.generate_key())
+    store.record_message_version("me", 10, 20, "BTC private long signal", NOW)
+    assert store.message_versions("me", 10, 20)[0]["raw_text"] == "BTC private long signal"
+    store.close()
+    assert b"BTC private long signal" not in path.read_bytes()
+
+
+def test_identical_text_in_different_messages_safely_reuses_encrypted_content(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    assert store.record_message_version("me", 10, 20, "BTC same signal", NOW) is True
+    assert store.record_message_version("me", 11, 21, "BTC same signal", NOW) is True
+    assert store.message_versions("me", 10, 20)[0]["raw_text"] == "BTC same signal"
+    assert store.message_versions("me", 11, 21)[0]["raw_text"] == "BTC same signal"
+
+
+def test_channel_offset_only_moves_forward(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    store.update_channel_offset("me", 10, 200)
+    store.update_channel_offset("me", 10, 190)
+    assert store.channel_offset("me", 10) == 200
 
 
 def test_deleted_message_retains_audit_history(tmp_path) -> None:
@@ -119,3 +147,46 @@ async def test_new_channel_signal_is_confirmed_and_pushed_to_phone(tmp_path) -> 
     assert result.signal.symbol == "SOLUSDT"
     assert state.confirmations[0].id == result.id
     assert notifier.sent == [result]
+
+
+async def test_old_edited_signal_uses_original_publish_time(tmp_path) -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(symbol, "146.35", trend_1h=-1, aggressive_flow_imbalance="-0.8", oi_change_ratio="0.06")
+
+    state = ApplicationState(mode="live")
+    coordinator = TelegramSignalCoordinator(
+        state=state,
+        store=AuditStore(tmp_path / "audit.sqlite3"),
+        market=Market(),
+        clock=lambda: NOW,
+    )
+    update = TelegramUpdate(
+        "edited", 10, 22, "SOLUSDT SHORT entry 146.2-146.5 SL 147.4 TP 144.6",
+        NOW, published_at=NOW.replace(hour=7, minute=30), edited_at=NOW,
+    )
+    result = await coordinator.process_update(update)
+    assert result is not None
+    assert result.verdict.value == "EXPIRED"
+
+
+async def test_deleted_source_signal_immediately_invalidates_order_plan(tmp_path) -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(symbol, "146.35", trend_1h=-1, aggressive_flow_imbalance="-0.8", oi_change_ratio="0.06")
+
+    state = ApplicationState(mode="live")
+    coordinator = TelegramSignalCoordinator(
+        state=state,
+        store=AuditStore(tmp_path / "audit.sqlite3"),
+        market=Market(),
+        clock=lambda: NOW,
+    )
+    await coordinator.process_update(TelegramUpdate(
+        "new", 10, 23, "SOLUSDT SHORT entry 146.2-146.5 SL 147.4 TP 144.6 142.9", NOW,
+    ))
+    assert state.confirmations[0].order_plan is not None
+    await coordinator.process_update(TelegramUpdate("deleted", 10, 23, None, NOW))
+    assert state.confirmations[0].verdict.value == "REJECTED"
+    assert state.confirmations[0].order_plan is None
+    assert state.confirmations[0].reason_codes == ("source_message_deleted",)

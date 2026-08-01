@@ -75,11 +75,21 @@ export interface Confirmation {
   };
 }
 
+export interface Candle {
+  timestamp: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}
+
 export interface Snapshot {
   mode: string;
   opportunities: Opportunity[];
   smart_money: SmartMoneyCandidate[];
   confirmations: Confirmation[];
+  candles?: Record<string, Candle[]>;
 }
 
 export interface Health {

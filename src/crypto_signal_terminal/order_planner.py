@@ -39,12 +39,14 @@ class OrderPlanner:
         midpoint = (signal.entry_low + signal.entry_high) / Decimal("2")
         distance = abs(midpoint - signal.stop)
         risk_amount = self.settings.account_equity * self.settings.risk_fraction
-        cost_per_unit = midpoint * (self.settings.fee_rate + self.settings.max_slippage_bps / Decimal("10000"))
+        round_trip_fee_rate = self.settings.fee_rate * Decimal("2")
+        cost_per_unit = midpoint * (round_trip_fee_rate + self.settings.max_slippage_bps / Decimal("10000"))
         quantity = risk_amount / (distance + cost_per_unit)
         weights = self._allocations(len(targets))
         average_reward = sum((abs(target - midpoint) * allocation for target, allocation in zip(targets, weights, strict=True)), Decimal("0"))
         net_risk = distance + cost_per_unit
-        reward_to_risk = max(Decimal("0.01"), average_reward / net_risk)
+        net_reward = max(Decimal("0"), average_reward - cost_per_unit)
+        reward_to_risk = max(Decimal("0.01"), net_reward / net_risk)
         within_entry = signal.entry_low <= market.price <= signal.entry_high
         order_type = OrderType.LIMIT if within_entry else OrderType.STOP_MARKET
         return OrderPlan(
@@ -61,7 +63,7 @@ class OrderPlanner:
             risk_amount=risk_amount,
             reward_to_risk=reward_to_risk,
             invalidation=(f"Price closes below {signal.stop}" if signal.direction is Direction.LONG else f"Price closes above {signal.stop}"),
-            estimated_fees=midpoint * quantity * self.settings.fee_rate,
+            estimated_fees=midpoint * quantity * round_trip_fee_rate,
         )
 
     @staticmethod

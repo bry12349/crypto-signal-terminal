@@ -19,13 +19,24 @@ class ConfirmationEngine:
         self.planner = planner or OrderPlanner()
 
     def confirm(self, signal: TelegramSignal, market: MarketSnapshot, *, analyzed_at: datetime) -> ConfirmationResult:
-        result_id = f"telegram:{signal.channel_id}:{signal.message_id}:{int(analyzed_at.timestamp())}"
+        result_id = f"telegram:{signal.channel_id}:{signal.message_id}"
         if signal.symbol is None or signal.direction is None or signal.entry_low is None or signal.entry_high is None:
             return self._result(result_id, signal, Verdict.UNPARSEABLE, analyzed_at, 0, ("essential_fields_missing",))
         if signal.symbol != market.symbol:
             return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("symbol_mismatch",))
         if not market.data_health.healthy:
             return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("stale_market",))
+        if market.data_health.latency_ms > 5000:
+            return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("market_latency_too_high",))
+        midpoint = (market.bid + market.ask) / Decimal("2")
+        spread_bps = (market.ask - market.bid) / midpoint * Decimal("10000")
+        if spread_bps > Decimal("25"):
+            return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("spread_too_wide",))
+        if abs(market.funding_rate) > Decimal("0.003"):
+            return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("extreme_funding",))
+        estimated_slippage = Decimal(str(market.features.get("slippage_bps_1000", "0")))
+        if estimated_slippage > Decimal("15"):
+            return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("slippage_too_high",))
         if analyzed_at - signal.published_at > timedelta(minutes=15):
             return self._result(result_id, signal, Verdict.EXPIRED, analyzed_at, 10, ("message_too_old",))
         if self._entry_missed(signal, market):
@@ -35,6 +46,9 @@ class ConfirmationEngine:
         oi = Decimal(str(market.features.get("oi_change_ratio", "0")))
         trend = int(market.features.get("trend_1h", 0))
         direction_sign = 1 if signal.direction is Direction.LONG else -1
+        depth = Decimal(str(market.features.get("depth_imbalance", "0")))
+        if depth * direction_sign < Decimal("-0.55"):
+            return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, 0, ("directional_depth_opposes_signal",))
         evidence: list[Evidence] = []
         score = 48
         if trend == direction_sign:
@@ -56,7 +70,7 @@ class ConfirmationEngine:
             return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, min(score, 55), ("invalid_order_geometry", str(exc)))
         if plan.reward_to_risk < Decimal("1.2"):
             return self._result(result_id, signal, Verdict.REJECTED, analyzed_at, min(score, 55), ("poor_reward_to_risk",))
-        verdict = Verdict.CONFIRMED if score >= 75 else Verdict.CONDITIONAL
+        verdict = Verdict.CONFIRMED if score >= 75 and market.peer_confirmations >= 2 else Verdict.CONDITIONAL
         return ConfirmationResult(
             id=result_id,
             signal=signal,

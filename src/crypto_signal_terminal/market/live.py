@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from datetime import UTC, datetime
+from decimal import Decimal
+
+import httpx
+
+from crypto_signal_terminal.domain.models import DataHealth, MarketSnapshot
+
+
+def _d(value: object, default: str = "0") -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal(default)
+
+
+def _sign(value: Decimal, threshold: Decimal = Decimal("0")) -> int:
+    return 1 if value > threshold else -1 if value < -threshold else 0
+
+
+class BybitCompositeMarketClient:
+    """Builds a confirmation snapshot from public derivatives data only."""
+
+    def __init__(
+        self,
+        *,
+        client: httpx.AsyncClient | None = None,
+        clock: Callable[[], datetime] = lambda: datetime.now(tz=UTC),
+        include_peers: bool = True,
+    ) -> None:
+        self.client = client
+        self.clock = clock
+        self.include_peers = include_peers
+
+    async def _get(self, client: httpx.AsyncClient, path: str, **params: object) -> dict:
+        response = await client.get(path, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("retCode") != 0:
+            raise RuntimeError(f"bybit_error:{payload.get('retCode')}")
+        return payload["result"]
+
+    async def snapshot(self, symbol: str) -> MarketSnapshot:
+        normalized = symbol.upper().replace("/", "").replace("-", "")
+        owned = self.client is None
+        client = self.client or httpx.AsyncClient(base_url="https://api.bybit.com", timeout=7)
+        started = self.clock()
+        try:
+            ticker, candles_1h, candles_5m, book, trades, oi = await asyncio.gather(
+                self._get(client, "/v5/market/tickers", category="linear", symbol=normalized),
+                self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="60", limit=24),
+                self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="5", limit=60),
+                self._get(client, "/v5/market/orderbook", category="linear", symbol=normalized, limit=50),
+                self._get(client, "/v5/market/recent-trade", category="linear", symbol=normalized, limit=200),
+                self._get(client, "/v5/market/open-interest", category="linear", symbol=normalized, intervalTime="5min", limit=2),
+            )
+            observed = self.clock()
+            ticker_item = ticker["list"][0]
+            features = self._features(candles_1h["list"], candles_5m["list"], book, trades["list"], oi["list"])
+            price = _d(ticker_item["lastPrice"])
+            latency_ms = max(0, int((observed - started).total_seconds() * 1000))
+            peer_confirmations = 1 + (await self._okx_price_confirms(normalized, price) if self.include_peers else 0)
+            return MarketSnapshot(
+                symbol=normalized,
+                exchange="bybit-public-composite",
+                observed_at=observed,
+                price=price,
+                bid=_d(ticker_item["bid1Price"]),
+                ask=_d(ticker_item["ask1Price"]),
+                open_interest=_d(ticker_item.get("openInterest")),
+                funding_rate=_d(ticker_item.get("fundingRate")),
+                volume_24h=_d(ticker_item.get("turnover24h")),
+                data_health=DataHealth(healthy=True, observed_at=observed, latency_ms=latency_ms),
+                peer_confirmations=peer_confirmations,
+                features=features,
+            )
+        finally:
+            if owned:
+                await client.aclose()
+
+    @staticmethod
+    async def _okx_price_confirms(symbol: str, reference: Decimal) -> int:
+        if not symbol.endswith("USDT") or reference <= 0:
+            return 0
+        instrument = f"{symbol[:-4]}-USDT-SWAP"
+        try:
+            async with httpx.AsyncClient(base_url="https://www.okx.com", timeout=4) as client:
+                response = await client.get("/api/v5/market/ticker", params={"instId": instrument})
+                response.raise_for_status()
+                item = response.json()["data"][0]
+                peer_mid = (_d(item["bidPx"]) + _d(item["askPx"])) / 2
+                deviation = abs(peer_mid - reference) / reference
+                return 1 if deviation <= Decimal("0.0075") else 0
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _features(candles_1h: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict]) -> dict[str, str | int]:
+        hour = list(reversed(candles_1h))
+        five = list(reversed(candles_5m))
+        hour_closes = [_d(row[4]) for row in hour]
+        five_closes = [_d(row[4]) for row in five]
+        hour_move = hour_closes[-1] - hour_closes[-2] if len(hour_closes) >= 2 else Decimal("0")
+        four_hour_move = hour_closes[-1] - hour_closes[-5] if len(hour_closes) >= 5 else hour_move
+        setup_move = five_closes[-1] - five_closes[-4] if len(five_closes) >= 4 else Decimal("0")
+        trigger_move = five_closes[-1] - five_closes[-2] if len(five_closes) >= 2 else Decimal("0")
+
+        bids = sum((_d(row[1]) for row in book.get("b", [])), Decimal("0"))
+        asks = sum((_d(row[1]) for row in book.get("a", [])), Decimal("0"))
+        depth = (bids - asks) / (bids + asks) if bids + asks else Decimal("0")
+
+        buys = sum((_d(item["size"]) for item in trades if item.get("side") == "Buy"), Decimal("0"))
+        sells = sum((_d(item["size"]) for item in trades if item.get("side") == "Sell"), Decimal("0"))
+        flow = (buys - sells) / (buys + sells) if buys + sells else Decimal("0")
+
+        chunk_signs: list[int] = []
+        chunk_size = max(1, len(trades) // 4)
+        for start in range(0, len(trades), chunk_size):
+            chunk = trades[start:start + chunk_size]
+            chunk_buy = sum((_d(item["size"]) for item in chunk if item.get("side") == "Buy"), Decimal("0"))
+            chunk_sell = sum((_d(item["size"]) for item in chunk if item.get("side") == "Sell"), Decimal("0"))
+            chunk_signs.append(_sign(chunk_buy - chunk_sell))
+        desired = _sign(flow)
+        persistence = Decimal(sum(1 for item in chunk_signs if item == desired)) / Decimal(len(chunk_signs) or 1)
+
+        sizes = sorted(_d(item["size"]) for item in trades)
+        threshold = sizes[int((len(sizes) - 1) * 0.75)] if sizes else Decimal("0")
+        large_count = sum(1 for size in sizes if size >= threshold and threshold > 0)
+
+        oi_values = [_d(item.get("openInterest")) for item in oi_rows]
+        oi_ratio = oi_values[0] / oi_values[-1] - 1 if len(oi_values) >= 2 and oi_values[-1] else Decimal("0")
+
+        ranges = [_d(row[2]) - _d(row[3]) for row in five]
+        current_range = ranges[-1] if ranges else Decimal("0")
+        atr_percentile = Decimal(sum(1 for item in ranges if item <= current_range)) / Decimal(len(ranges) or 1) * 100
+        volumes = [_d(row[5]) for row in five]
+        baseline = sum(volumes[-13:-1], Decimal("0")) / Decimal(len(volumes[-13:-1]) or 1)
+        volume_acceleration = volumes[-1] / baseline if volumes and baseline else Decimal("1")
+
+        first_price = _d(trades[-1]["price"]) if trades else Decimal("0")
+        last_price = _d(trades[0]["price"]) if trades else Decimal("0")
+        impact = (last_price - first_price) / first_price * 10000 if first_price else Decimal("0")
+        absorption = abs(flow) - min(Decimal("1"), abs(impact) / Decimal("20"))
+        return {
+            "trend_4h": _sign(four_hour_move),
+            "trend_1h": _sign(hour_move),
+            "setup_15m": _sign(setup_move),
+            "trigger_5m": _sign(trigger_move),
+            "depth_imbalance": str(depth.quantize(Decimal("0.0001"))),
+            "aggressive_flow_imbalance": str(flow.quantize(Decimal("0.0001"))),
+            "flow_persistence": str(persistence.quantize(Decimal("0.01"))),
+            "large_trade_count": large_count,
+            "oi_change_ratio": str(oi_ratio.quantize(Decimal("0.0001"))),
+            "atr_percentile": str(atr_percentile.quantize(Decimal("0.1"))),
+            "volume_acceleration": str(volume_acceleration.quantize(Decimal("0.01"))),
+            "price_impact_bps": str(impact.quantize(Decimal("0.01"))),
+            "absorption": str(absorption.quantize(Decimal("0.01"))),
+        }

@@ -1,0 +1,1 @@
+"""Shared immutable domain contracts."""

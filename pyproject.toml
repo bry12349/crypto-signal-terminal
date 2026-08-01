@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-signal-terminal"
+version = "0.1.0"
+description = "Local-first crypto perpetual opportunity and Telegram confirmation terminal"
+requires-python = ">=3.12"
+dependencies = [
+  "duckdb>=1.3,<2",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "keyring>=25.6,<26",
+  "pydantic>=2.11,<3",
+  "qrcode>=8.2,<9",
+  "telethon>=1.40,<2",
+  "uvicorn[standard]>=0.35,<1",
+  "websockets>=15,<16",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyinstaller>=6.15,<7",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+]
+
+[project.scripts]
+crypto-signal-service = "crypto_signal_terminal.main:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+filterwarnings = [
+  "ignore:Using .*starlette.testclient.*",
+]

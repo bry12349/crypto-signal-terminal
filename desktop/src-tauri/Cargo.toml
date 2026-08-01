@@ -1,0 +1,17 @@
+[package]
+name = "crypto-signal-terminal"
+version = "0.1.0"
+description = "Local-first crypto signal execution terminal"
+authors = ["a0000"]
+edition = "2021"
+
+[lib]
+name = "crypto_signal_terminal_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"

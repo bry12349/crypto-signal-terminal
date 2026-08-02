@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from crypto_signal_terminal.config import KeyringSecretStore, SecretStore
 from crypto_signal_terminal.domain.models import ConfirmationResult, Opportunity, SmartMoneyCandidate
+from crypto_signal_terminal.market.health import MarketHealthRegistry
 from crypto_signal_terminal.telegram.auth import TelegramLoginManager
 
 
@@ -25,6 +26,7 @@ class ApplicationState:
     telegram_channels: list[dict] = field(default_factory=list)
     telegram_authorized: bool = False
     market_health: str = "healthy"
+    market_health_registry: MarketHealthRegistry = field(default_factory=MarketHealthRegistry)
     paper_orders: list[dict] = field(default_factory=list)
     market_candles: dict[str, list[dict]] = field(default_factory=dict)
     dune_health: str = "not_configured"
@@ -101,9 +103,11 @@ def create_app(
 
     @app.get("/api/v1/health")
     async def health() -> dict:
+        market = runtime.market_health_registry.snapshot()
         return {
             "mode": runtime.mode,
-            "market": runtime.market_health,
+            "market": market["overall"] if market["expected_count"] else runtime.market_health,
+            "market_detail": market,
             "telegram": "healthy" if runtime.telegram_authorized else "configured" if runtime.credentials.get("telegram") else "not_configured",
             "bot": "healthy" if runtime.credentials.get("bot") else "not_configured",
             "dune": runtime.dune_health if runtime.credentials.get("dune") else "not_configured",

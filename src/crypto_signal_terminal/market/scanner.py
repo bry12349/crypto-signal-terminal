@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
+from crypto_signal_terminal.market.health import classify_market_error
 from crypto_signal_terminal.telegram.coordinator import MarketProvider
 
 
@@ -31,6 +33,7 @@ class LiveMarketScanner:
         self.trend = TrendEngine()
         self.altcoin = AltcoinEngine()
         self.smart = SmartMoneyEngine()
+        self.state.market_health_registry.set_watchlist(watchlist)
 
     async def scan_once(self) -> int:
         semaphore = asyncio.Semaphore(3)
@@ -38,13 +41,22 @@ class LiveMarketScanner:
         async def fetch(symbol: str):
             async with semaphore:
                 try:
-                    return await self.market.snapshot(symbol)
-                except Exception:
-                    return None
+                    return symbol, await self.market.snapshot(symbol), None
+                except Exception as exc:
+                    return symbol, None, classify_market_error(exc)
 
-        snapshots = [item for item in await asyncio.gather(*(fetch(symbol) for symbol in self.watchlist)) if item is not None]
+        results = await asyncio.gather(*(fetch(symbol) for symbol in self.watchlist))
+        snapshots = []
+        for symbol, snapshot, error in results:
+            if snapshot is None:
+                self.state.market_health_registry.record_failure(
+                    symbol, observed_at=datetime.now(tz=UTC), reason=error or "unknown",
+                )
+            else:
+                snapshots.append(snapshot)
+                self.state.market_health_registry.record_success(snapshot)
         if not snapshots:
-            self.state.market_health = "degraded"
+            self.state.market_health = self.state.market_health_registry.overall
             return 0
         opportunities = []
         smart_money = []
@@ -61,10 +73,7 @@ class LiveMarketScanner:
         self.state.confirmations = [
             item for item in self.state.confirmations if item.signal.account_id != "demo"
         ]
-        all_sources_healthy = len(snapshots) == len(self.watchlist) and all(
-            snapshot.data_health.healthy for snapshot in snapshots
-        )
-        self.state.market_health = "healthy" if all_sources_healthy else "degraded"
+        self.state.market_health = self.state.market_health_registry.overall
         self.state.mode = "live"
         self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
         return len(snapshots)

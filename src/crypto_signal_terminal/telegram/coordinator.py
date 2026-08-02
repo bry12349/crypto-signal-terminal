@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from crypto_signal_terminal.config import SecretStore
 from crypto_signal_terminal.confirmation import ConfirmationEngine
 from crypto_signal_terminal.domain.models import ConfirmationResult, MarketSnapshot, Verdict
+from crypto_signal_terminal.market.health import classify_market_error
 from crypto_signal_terminal.storage import AuditStore
 from crypto_signal_terminal.telegram.client import PinnedChannelMonitor, TelegramUpdate
 from crypto_signal_terminal.telegram.parser import parse_signal
@@ -87,10 +88,14 @@ class TelegramSignalCoordinator:
             return None
         try:
             snapshot = await self.market.snapshot(signal.symbol)
-        except Exception:
-            self.state.market_health = "degraded"
+        except Exception as exc:
+            self.state.market_health_registry.record_failure(
+                signal.symbol, observed_at=self.clock(), reason=classify_market_error(exc),
+            )
+            self.state.market_health = self.state.market_health_registry.overall
             return None
-        self.state.market_health = "healthy"
+        self.state.market_health_registry.record_success(snapshot)
+        self.state.market_health = self.state.market_health_registry.overall
         self.state.market_candles[snapshot.symbol] = [item.model_dump(mode="json") for item in snapshot.candles]
         result = self.confirmation.confirm(signal, snapshot, analyzed_at=self.clock())
         self.state.confirmations.insert(0, result)

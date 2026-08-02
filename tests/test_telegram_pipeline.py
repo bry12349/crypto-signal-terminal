@@ -149,6 +149,29 @@ async def test_new_channel_signal_is_confirmed_and_pushed_to_phone(tmp_path) -> 
     assert notifier.sent == [result]
 
 
+async def test_telegram_success_does_not_hide_another_symbol_failure(tmp_path) -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(symbol, "146.35", trend_1h=-1, aggressive_flow_imbalance="-0.8", oi_change_ratio="0.06")
+
+    state = ApplicationState(mode="live")
+    state.market_health_registry.set_watchlist(("SOLUSDT", "ETHUSDT"))
+    state.market_health_registry.record_failure("ETHUSDT", observed_at=NOW, reason="timeout")
+    coordinator = TelegramSignalCoordinator(
+        state=state,
+        store=AuditStore(tmp_path / "audit.sqlite3"),
+        market=Market(),
+        clock=lambda: NOW,
+    )
+
+    await coordinator.process_update(TelegramUpdate(
+        "new", 10, 24, "SOLUSDT SHORT entry 146.2-146.5 SL 147.4 TP 144.6 142.9", NOW,
+    ))
+
+    assert state.market_health == "degraded"
+    assert state.market_health_registry.snapshot()["symbols"]["ETHUSDT"]["status"] == "unavailable"
+
+
 async def test_old_edited_signal_uses_original_publish_time(tmp_path) -> None:
     class Market:
         async def snapshot(self, symbol: str):

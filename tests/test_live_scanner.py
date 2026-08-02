@@ -43,6 +43,10 @@ async def test_partial_watchlist_failure_is_visible_as_degraded() -> None:
     scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT", "ETHUSDT"))
     assert await scanner.scan_once() == 1
     assert state.market_health == "degraded"
+    health = state.market_health_registry.snapshot()
+    assert health["symbols"]["BTCUSDT"]["status"] == "healthy"
+    assert health["symbols"]["ETHUSDT"]["status"] == "unavailable"
+    assert health["symbols"]["ETHUSDT"]["reason"] == "upstream_error"
 
 
 async def test_stale_exchange_timestamps_cannot_report_healthy_market() -> None:

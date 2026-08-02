@@ -142,3 +142,36 @@ async def test_notifier_deduplicates_delivery(tmp_path) -> None:
     assert await notifier.send(result) is False
     assert calls == 1
     await client.aclose()
+
+
+def test_paper_order_journal_survives_store_restart(tmp_path) -> None:
+    path = tmp_path / "audit.sqlite3"
+    record = {
+        "id": "paper:stable",
+        "opportunity_id": "trend:BTCUSDT:entry",
+        "symbol": "BTCUSDT",
+        "status": "PREPARED",
+        "prepared_at": NOW.isoformat(),
+        "plan": {"direction": "LONG", "stop": "66000"},
+    }
+    store = AuditStore(path)
+    store.record_paper_order(record)
+    store.close()
+
+    reopened = AuditStore(path)
+    assert reopened.paper_orders() == [record]
+
+
+def test_paper_order_history_limit_is_bounded(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    for index in range(3):
+        store.record_paper_order({
+            "id": f"paper:{index}",
+            "opportunity_id": f"opportunity:{index}",
+            "symbol": "BTCUSDT",
+            "status": "PREPARED",
+            "prepared_at": (NOW + timedelta(seconds=index)).isoformat(),
+            "plan": {"direction": "LONG"},
+        })
+    assert [item["id"] for item in store.paper_orders(limit=2)] == ["paper:2", "paper:1"]
+    assert len(store.paper_orders(limit=500)) == 3

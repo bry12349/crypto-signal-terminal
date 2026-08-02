@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ class AuditStore:
         self.path = Path(path)
         self._fernet = Fernet(encryption_key or self.generate_key())
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(self.path)
+        self._connection = sqlite3.connect(self.path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._migrate_plaintext_table()
@@ -53,6 +54,14 @@ class AuditStore:
               channel_id INTEGER NOT NULL,
               last_message_id INTEGER NOT NULL,
               PRIMARY KEY(account_id, channel_id)
+            )"""
+        )
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS paper_orders (
+              sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+              order_id TEXT NOT NULL UNIQUE,
+              prepared_at TEXT NOT NULL,
+              payload_json TEXT NOT NULL
             )"""
         )
         self._connection.commit()
@@ -183,6 +192,22 @@ class AuditStore:
     def release_notification(self, key: str) -> None:
         self._connection.execute("DELETE FROM notification_deliveries WHERE idempotency_key=?", (key,))
         self._connection.commit()
+
+    def record_paper_order(self, record: dict) -> None:
+        payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        self._connection.execute(
+            "INSERT INTO paper_orders (order_id, prepared_at, payload_json) VALUES (?, ?, ?)",
+            (record["id"], record["prepared_at"], payload),
+        )
+        self._connection.commit()
+
+    def paper_orders(self, *, limit: int = 50) -> list[dict]:
+        bounded = max(1, min(200, limit))
+        rows = self._connection.execute(
+            "SELECT payload_json FROM paper_orders ORDER BY prepared_at DESC, sequence DESC LIMIT ?",
+            (bounded,),
+        ).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
 
     def close(self) -> None:
         self._connection.close()

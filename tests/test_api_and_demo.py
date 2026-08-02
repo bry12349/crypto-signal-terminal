@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from crypto_signal_terminal.api import ApplicationState, create_app
 from crypto_signal_terminal.config import MemorySecretStore
 from crypto_signal_terminal.main import build_demo_state, build_live_state, parent_is_gone, parse_args, run_demo_replay
+from crypto_signal_terminal.storage import AuditStore
 
 
 def test_snapshot_exposes_all_signal_paths_without_secrets() -> None:
@@ -24,6 +25,8 @@ def test_health_reports_demo_integrations_as_optional() -> None:
     body = TestClient(app).get("/api/v1/health").json()
     assert body["mode"] == "demo"
     assert body["market"] == "healthy"
+    assert body["market_detail"]["healthy_count"] == 2
+    assert body["market_detail"]["expected_count"] == 2
     assert body["telegram"] == "not_configured"
 
 
@@ -51,6 +54,64 @@ def test_paper_order_endpoint_records_complete_plan() -> None:
     assert response.status_code == 201
     assert response.json()["status"] == "PREPARED"
     assert response.json()["plan"]["stop"]
+
+
+def test_live_paper_order_rejects_stale_symbol_health() -> None:
+    state = build_demo_state()
+    state.mode = "live"
+    opportunity = next(item for item in state.opportunities if item.order_plan is not None)
+    client = TestClient(create_app(
+        state,
+        clock=lambda: opportunity.updated_at + timedelta(seconds=31),
+    ))
+    response = client.post("/api/v1/paper-orders", json={"opportunity_id": opportunity.id})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Symbol market data is stale or unavailable"
+
+
+def test_live_paper_order_rejects_unhealthy_original_opportunity() -> None:
+    state = build_demo_state()
+    state.mode = "live"
+    opportunity = next(item for item in state.opportunities if item.order_plan is not None)
+    state.opportunities = [
+        item.model_copy(update={"data_health": item.data_health.model_copy(update={"healthy": False})})
+        if item.id == opportunity.id else item
+        for item in state.opportunities
+    ]
+    client = TestClient(create_app(state, clock=lambda: opportunity.updated_at))
+    response = client.post("/api/v1/paper-orders", json={"opportunity_id": opportunity.id})
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Opportunity was produced from unhealthy market data"
+
+
+def test_paper_order_is_persisted_and_available_from_history(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    state = build_demo_state()
+    opportunity = next(item for item in state.opportunities if item.order_plan is not None)
+    client = TestClient(create_app(state, audit_store=store, clock=lambda: opportunity.updated_at))
+
+    prepared = client.post("/api/v1/paper-orders", json={"opportunity_id": opportunity.id})
+    history = client.get("/api/v1/paper-orders").json()
+
+    assert prepared.status_code == 201
+    assert history[0]["id"] == prepared.json()["id"]
+    assert history[0]["symbol"] == opportunity.symbol
+    assert AuditStore(tmp_path / "audit.sqlite3").paper_orders()[0]["id"] == prepared.json()["id"]
+
+
+def test_confirmed_telegram_signal_can_prepare_paper_order(tmp_path) -> None:
+    state = build_demo_state()
+    result = next(item for item in state.confirmations if item.order_plan is not None)
+    client = TestClient(create_app(
+        state,
+        audit_store=AuditStore(tmp_path / "audit.sqlite3"),
+        clock=lambda: result.analyzed_at,
+    ))
+
+    response = client.post("/api/v1/paper-orders", json={"opportunity_id": result.id})
+
+    assert response.status_code == 201
+    assert response.json()["symbol"] == result.signal.symbol
 
 
 def test_unknown_paper_order_is_not_found() -> None:

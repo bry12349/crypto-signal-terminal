@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Awaitable, Callable
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,7 @@ from pydantic import BaseModel
 from crypto_signal_terminal.config import KeyringSecretStore, SecretStore
 from crypto_signal_terminal.domain.models import ConfirmationResult, Opportunity, SmartMoneyCandidate
 from crypto_signal_terminal.market.health import MarketHealthRegistry
+from crypto_signal_terminal.storage import AuditStore
 from crypto_signal_terminal.telegram.auth import TelegramLoginManager
 
 
@@ -70,6 +72,7 @@ def create_app(
     state: ApplicationState | None = None,
     *,
     secret_store: SecretStore | None = None,
+    audit_store: AuditStore | None = None,
     background_runner: Callable[[asyncio.Event], Awaitable[None]] | None = None,
     clock: Callable[[], datetime] = lambda: datetime.now(tz=UTC),
 ) -> FastAPI:
@@ -171,20 +174,37 @@ def create_app(
     @app.post("/api/v1/paper-orders", status_code=status.HTTP_201_CREATED)
     async def prepare_paper_order(request: PaperOrderRequest) -> dict:
         opportunity = next((item for item in runtime.opportunities if item.id == request.opportunity_id), None)
-        if opportunity is None or opportunity.order_plan is None:
+        confirmation = next((item for item in runtime.confirmations if item.id == request.opportunity_id), None)
+        plan = opportunity.order_plan if opportunity is not None else confirmation.order_plan if confirmation is not None else None
+        symbol = opportunity.symbol if opportunity is not None else confirmation.signal.symbol if confirmation is not None else None
+        if plan is None or symbol is None:
             raise HTTPException(status_code=404, detail="Actionable opportunity not found")
-        if opportunity.order_plan.expires_at <= clock():
+        now = clock()
+        if plan.expires_at <= now:
             raise HTTPException(status_code=409, detail="Opportunity expired; refresh market analysis")
-        if runtime.mode == "live" and runtime.market_health != "healthy":
-            raise HTTPException(status_code=409, detail="Market data is not fully healthy")
+        if opportunity is not None and not opportunity.data_health.healthy:
+            raise HTTPException(status_code=409, detail="Opportunity was produced from unhealthy market data")
+        if runtime.mode == "live" and not runtime.market_health_registry.is_tradable(symbol, now=now):
+            raise HTTPException(status_code=409, detail="Symbol market data is stale or unavailable")
         record = {
-            "id": f"paper:{len(runtime.paper_orders) + 1}",
-            "opportunity_id": opportunity.id,
+            "id": f"paper:{uuid4().hex}",
+            "opportunity_id": request.opportunity_id,
+            "symbol": symbol,
             "status": "PREPARED",
-            "plan": opportunity.order_plan.model_dump(mode="json"),
+            "prepared_at": now.isoformat(),
+            "plan": plan.model_dump(mode="json"),
         }
+        if audit_store is not None:
+            audit_store.record_paper_order(record)
         runtime.paper_orders.append(record)
         return record
+
+    @app.get("/api/v1/paper-orders")
+    async def paper_orders(limit: int = 50) -> list[dict]:
+        bounded = max(1, min(200, limit))
+        if audit_store is not None:
+            return audit_store.paper_orders(limit=bounded)
+        return list(reversed(runtime.paper_orders[-bounded:]))
 
     @app.websocket("/api/v1/events")
     async def events(websocket: WebSocket) -> None:

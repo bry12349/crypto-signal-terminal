@@ -72,7 +72,7 @@ def build_demo_state() -> ApplicationState:
         parse_confidence=100,
     )
     confirmation = ConfirmationEngine().confirm(signal, sol, analyzed_at=DEMO_TIME)
-    return ApplicationState(
+    state = ApplicationState(
         mode="demo",
         opportunities=[item for item in (trend, alt) if item is not None],
         smart_money=[item for item in (smart,) if item is not None],
@@ -80,6 +80,10 @@ def build_demo_state() -> ApplicationState:
         credentials={"telegram": False, "bot": False, "dune": False},
         market_health="healthy",
     )
+    state.market_health_registry.set_watchlist((btc.symbol, sol.symbol))
+    state.market_health_registry.record_success(btc)
+    state.market_health_registry.record_success(sol)
+    return state
 
 
 def build_live_state() -> ApplicationState:
@@ -128,6 +132,7 @@ def run() -> None:
         audit_key = AuditStore.generate_key().decode("ascii")
         secrets.set("audit_encryption_key", audit_key)
     store = AuditStore(settings.runtime_dir.expanduser() / "audit.sqlite3", encryption_key=audit_key.encode("ascii"))
+    state.paper_orders = list(reversed(store.paper_orders(limit=200)))
 
     def notifier_factory() -> TelegramBotNotifier | None:
         token = secrets.get("telegram_bot_token")
@@ -153,7 +158,7 @@ def run() -> None:
         await asyncio.gather(*services)
 
     uvicorn.run(
-        create_app(state, secret_store=secrets, background_runner=background),
+        create_app(state, secret_store=secrets, audit_store=store, background_runner=background),
         host="127.0.0.1",
         port=args.port,
         log_level="info",

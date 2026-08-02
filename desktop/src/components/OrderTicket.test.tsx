@@ -24,4 +24,14 @@ describe("OrderTicket", () => {
       expect.objectContaining({ method: "POST", body: JSON.stringify({ opportunity_id: "trend:BTCUSDT:demo" }) }),
     );
   });
+
+  it("shows the server rejection reason instead of a generic error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ detail: "Symbol market data is stale or unavailable" }),
+    }));
+    render(<OrderTicket opportunity={demoSnapshot.opportunities[0]} />);
+    fireEvent.click(screen.getByRole("button", { name: /准备模拟订单/ }));
+    expect(await screen.findByText("该币种行情已过期或不可用，请等待下一轮刷新")).toBeVisible();
+  });
 });

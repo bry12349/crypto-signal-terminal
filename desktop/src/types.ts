@@ -98,4 +98,20 @@ export interface Health {
   telegram: string;
   bot: string;
   dune: string;
+  market_detail: MarketHealthDetail;
+}
+
+export interface MarketSymbolHealth {
+  symbol: string;
+  status: "healthy" | "degraded" | "unavailable" | "unknown";
+  observed_at: string | null;
+  latency_ms: number;
+  reason: string | null;
+}
+
+export interface MarketHealthDetail {
+  overall: string;
+  healthy_count: number;
+  expected_count: number;
+  symbols: Record<string, MarketSymbolHealth>;
 }

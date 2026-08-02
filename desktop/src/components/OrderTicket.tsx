@@ -11,24 +11,37 @@ function price(value: string) {
 
 export function OrderTicket({ opportunity }: { opportunity: Opportunity | null }) {
   const [status, setStatus] = useState<"idle" | "sending" | "prepared" | "error">("idle");
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const plan = opportunity?.order_plan;
   const prepare = useCallback(async () => {
     if (!opportunity || !plan || status === "sending") return;
     setStatus("sending");
+    setErrorDetail(null);
     try {
       const response = await fetch(`${API}/api/v1/paper-orders`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ opportunity_id: opportunity.id }),
       });
-      if (!response.ok) throw new Error("paper order rejected");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({ detail: "" })) as { detail?: string };
+        const detail = payload.detail === "Symbol market data is stale or unavailable"
+          ? "该币种行情已过期或不可用，请等待下一轮刷新"
+          : payload.detail === "Opportunity was produced from unhealthy market data"
+            ? "该机会生成时的数据不健康，已禁止准备订单"
+            : payload.detail === "Opportunity expired; refresh market analysis"
+              ? "机会有效期已结束，请等待重新分析"
+              : "模拟订单被本地风控拒绝";
+        throw new Error(detail);
+      }
       setStatus("prepared");
-    } catch {
+    } catch (error) {
       setStatus("error");
+      setErrorDetail(error instanceof Error ? error.message : "模拟订单被本地风控拒绝");
     }
   }, [opportunity, plan, status]);
 
-  useEffect(() => { setStatus("idle"); }, [opportunity?.id]);
+  useEffect(() => { setStatus("idle"); setErrorDetail(null); }, [opportunity?.id]);
   useEffect(() => {
     const handler = () => { void prepare(); };
     window.addEventListener("prepare-order", handler);
@@ -53,6 +66,7 @@ export function OrderTicket({ opportunity }: { opportunity: Opportunity | null }
       <div className="rr-row"><div><span>NET R:R</span><strong>1 : {Number(plan.reward_to_risk).toFixed(2)}</strong></div><div><span>SIZE</span><strong>{Number(plan.suggested_quantity).toFixed(3)}</strong></div></div>
       <div className="invalidation"><Shield size={15} /><div><span>失效条件</span><strong>{plan.invalidation}</strong></div></div>
       <button className="prepare-order" onClick={() => void prepare()} disabled={status === "sending" || status === "prepared"}>{buttonText} <span>↵</span></button>
+      {errorDetail && <div className="order-error" role="alert">{errorDetail}</div>}
       <p className="execution-note">默认按 $10,000 权益、单笔 0.25% 风险；v0.1.0 仅生成模拟订单</p>
     </aside>
   );

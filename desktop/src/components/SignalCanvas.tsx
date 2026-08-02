@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { createChart, CandlestickSeries, ColorType, HistogramSeries, type UTCTimestamp } from "lightweight-charts";
 import { AlertTriangle, CheckCircle2, Clock3, Crosshair, Layers3 } from "lucide-react";
-import type { Candle, Opportunity } from "../types";
+import type { Candle, MarketSymbolHealth, Opportunity } from "../types";
 
 function MiniChart({ selected, candles }: { selected: Opportunity; candles: Candle[] }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -37,9 +37,17 @@ function MiniChart({ selected, candles }: { selected: Opportunity; candles: Cand
   return <div className="chart" ref={ref} />;
 }
 
-export function SignalCanvas({ selected, candles, mode }: { selected: Opportunity | null; candles: Candle[]; mode: string }) {
+export function SignalCanvas({ selected, candles, mode, health }: { selected: Opportunity | null; candles: Candle[]; mode: string; health: MarketSymbolHealth | undefined }) {
   if (!selected) return <main className="signal-canvas empty-canvas"><Crosshair size={26} /><h2>当前无可执行机会</h2><p>只有满足触发、流动性与风控条件的结构才会出现在这里。</p></main>;
   const direction = selected.order_plan?.direction;
+  const base = selected.symbol.replace("USDT", "");
+  const healthLabel = health?.status === "healthy"
+    ? `${base} 行情健康`
+    : health?.status === "degraded"
+      ? `${base} 行情降级`
+      : health?.status === "unavailable"
+        ? `${base} 行情不可用`
+        : `${base} 行情待确认`;
   return (
     <main className="signal-canvas">
       <div className="instrument-head">
@@ -49,7 +57,9 @@ export function SignalCanvas({ selected, candles, mode }: { selected: Opportunit
       <div className="setup-ribbon">
         <span><Layers3 size={14} />{selected.title}</span>
         <span><Clock3 size={14} />{selected.state === "ENTRY_VALID" ? "有效窗口开启" : "等待触发"}</span>
-        <span className="data-fresh"><CheckCircle2 size={14} />{mode === "live" && candles.length ? "实时 K 线" : "图表数据不可用"}</span>
+        <span className={`data-fresh ${health?.status === "healthy" ? "" : "unhealthy"}`}>
+          {health?.status === "healthy" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{healthLabel}
+        </span>
       </div>
       <div className="chart-shell">
         {mode === "live" && candles.length ? <MiniChart selected={selected} candles={candles} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>暂无可验证的实时 K 线</strong><span>不会用模拟走势替代真实行情</span></div>}

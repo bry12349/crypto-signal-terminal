@@ -48,7 +48,10 @@ interface TerminalStore {
 export const useTerminalStore = create<TerminalStore>((set) => ({
   snapshot: { mode: "live", opportunities: [], smart_money: [], confirmations: [], candles: {} },
   opportunities: [],
-  health: { mode: "demo", market: "healthy", telegram: "not_configured", bot: "not_configured", dune: "not_configured" },
+  health: {
+    mode: "demo", market: "healthy", telegram: "not_configured", bot: "not_configured", dune: "not_configured",
+    market_detail: { overall: "connecting", healthy_count: 0, expected_count: 0, symbols: {} },
+  },
   selectedId: null,
   connected: false,
   select: (id) => set({ selectedId: id }),

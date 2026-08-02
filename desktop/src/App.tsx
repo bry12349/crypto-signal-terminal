@@ -46,7 +46,12 @@ export default function App() {
       </nav>
       <div className="workspace">
         <OpportunityStream items={opportunities} selectedId={selectedId} onSelect={select} />
-        <SignalCanvas selected={selected} mode={snapshot.mode} candles={selected ? snapshot.candles?.[selected.symbol] ?? [] : []} />
+        <SignalCanvas
+          selected={selected}
+          mode={snapshot.mode}
+          candles={selected ? snapshot.candles?.[selected.symbol] ?? [] : []}
+          health={selected ? health.market_detail.symbols[selected.symbol] : undefined}
+        />
         <OrderTicket opportunity={selected} />
       </div>
       <footer className="shortcut-bar"><span><kbd>J</kbd><kbd>K</kbd> 切换机会</span><span><kbd>Space</kbd> 展开证据</span><span><kbd>Enter</kbd> 准备订单</span><strong>只在结构完整时发出信号</strong></footer>

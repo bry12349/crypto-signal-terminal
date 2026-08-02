@@ -67,7 +67,7 @@ export function OrderTicket({ opportunity }: { opportunity: Opportunity | null }
       <div className="invalidation"><Shield size={15} /><div><span>失效条件</span><strong>{plan.invalidation}</strong></div></div>
       <button className="prepare-order" onClick={() => void prepare()} disabled={status === "sending" || status === "prepared"}>{buttonText} <span>↵</span></button>
       {errorDetail && <div className="order-error" role="alert">{errorDetail}</div>}
-      <p className="execution-note">默认按 $10,000 权益、单笔 0.25% 风险；v0.1.0 仅生成模拟订单</p>
+      <p className="execution-note">默认按 $10,000 权益、单笔 0.25% 风险；v0.2.0 仅生成模拟订单</p>
     </aside>
   );
 }

@@ -1,6 +1,6 @@
 [package]
 name = "crypto-signal-terminal"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first crypto signal execution terminal"
 authors = ["a0000"]
 edition = "2021"

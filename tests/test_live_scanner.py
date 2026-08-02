@@ -59,3 +59,19 @@ async def test_stale_exchange_timestamps_cannot_report_healthy_market() -> None:
     scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT",))
     assert await scanner.scan_once() == 1
     assert state.market_health == "degraded"
+
+
+async def test_total_market_failure_clears_stale_demo_opportunities() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            raise TimeoutError("offline")
+
+    state = build_demo_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT", "SOLUSDT"))
+
+    assert await scanner.scan_once() == 0
+    assert state.mode == "live"
+    assert state.opportunities == []
+    assert state.smart_money == []
+    assert all(item.signal.account_id != "demo" for item in state.confirmations)
+    assert state.market_health == "degraded"

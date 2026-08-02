@@ -56,7 +56,15 @@ class LiveMarketScanner:
                 snapshots.append(snapshot)
                 self.state.market_health_registry.record_success(snapshot)
         if not snapshots:
+            self.state.opportunities = []
+            self.state.smart_money = []
+            self.state.confirmations = [
+                item for item in self.state.confirmations if item.signal.account_id != "demo"
+            ]
+            self.state.market_candles = {}
             self.state.market_health = self.state.market_health_registry.overall
+            self.state.mode = "live"
+            self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
             return 0
         opportunities = []
         smart_money = []

@@ -90,7 +90,7 @@ def create_app(
             if task:
                 await task
 
-    app = FastAPI(title="Crypto Signal Terminal", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Crypto Signal Terminal", version="0.2.0", lifespan=lifespan)
     login_manager = TelegramLoginManager(secrets)
     app.add_middleware(
         CORSMiddleware,

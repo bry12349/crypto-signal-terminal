@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crypto-signal-terminal"
-version = "0.2.0"
-description = "Local-first crypto perpetual opportunity and Telegram confirmation terminal"
+version = "0.4.0"
+description = "Local-first crypto perpetual opportunity terminal"
 requires-python = ">=3.12"
 dependencies = [
   "cryptography==46.0.7",
@@ -14,8 +14,6 @@ dependencies = [
   "httpx==0.28.1",
   "keyring==25.7.0",
   "pydantic==2.13.4",
-  "qrcode==8.2",
-  "telethon==1.44.0",
   "uvicorn[standard]==0.52.0",
   "websockets==15.0.1",
 ]

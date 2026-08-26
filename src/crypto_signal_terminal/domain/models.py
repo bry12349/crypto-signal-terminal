@@ -38,17 +38,8 @@ class LifecycleState(StrEnum):
     EXPIRED = "EXPIRED"
 
 
-class Verdict(StrEnum):
-    CONFIRMED = "CONFIRMED"
-    CONDITIONAL = "CONDITIONAL"
-    REJECTED = "REJECTED"
-    EXPIRED = "EXPIRED"
-    UNPARSEABLE = "UNPARSEABLE"
-
-
 class SourceKind(StrEnum):
     NATIVE = "NATIVE"
-    TELEGRAM = "TELEGRAM"
     SMART_MONEY = "SMART_MONEY"
     DEMO = "DEMO"
 
@@ -123,6 +114,21 @@ class OrderPlan(FrozenModel):
         return self
 
 
+class SignalAnalysis(FrozenModel):
+    opportunity_score: int = Field(ge=0, le=100)
+    confidence: int = Field(ge=0, le=100)
+    p_tp_before_sl: Decimal = Field(ge=0, le=1)
+    expected_value: Decimal
+    evidence_conflict: Decimal = Field(ge=0, le=1)
+    is_tradeable: bool
+    market_regime: str
+    signal_type: str
+    smart_money_bias: str
+    derivatives_bias: str
+    order_flow_bias: str
+    news_bias: str
+
+
 class Opportunity(FrozenModel):
     id: str
     symbol: str = Field(pattern=r"^[A-Z0-9]{2,20}$")
@@ -137,6 +143,7 @@ class Opportunity(FrozenModel):
     title: str | None = None
     risk: str | None = None
     source_label: str | None = None
+    analysis: SignalAnalysis | None = None
 
     @model_validator(mode="after")
     def validate_opportunity(self) -> Opportunity:
@@ -150,24 +157,6 @@ class Opportunity(FrozenModel):
         return self
 
 
-class TelegramSignal(FrozenModel):
-    account_id: str
-    channel_id: int
-    message_id: int
-    published_at: datetime
-    edited_at: datetime | None = None
-    raw_text: str
-    symbol: str | None = None
-    direction: Direction | None = None
-    entry_low: Decimal | None = None
-    entry_high: Decimal | None = None
-    stop: Decimal | None = None
-    targets: tuple[Decimal, ...] = ()
-    leverage: Decimal | None = None
-    parse_confidence: int = Field(default=0, ge=0, le=100)
-    issues: tuple[str, ...] = ()
-
-
 class SmartMoneyCandidate(FrozenModel):
     id: str
     symbol: str
@@ -178,18 +167,6 @@ class SmartMoneyCandidate(FrozenModel):
     evidence: tuple[Evidence, ...]
     wallet: str | None = None
     chain: str | None = None
-
-
-class ConfirmationResult(FrozenModel):
-    id: str
-    signal: TelegramSignal
-    verdict: Verdict
-    confidence: int = Field(ge=0, le=100)
-    analyzed_at: datetime
-    evidence: tuple[Evidence, ...] = ()
-    reason_codes: tuple[str, ...] = ()
-    order_plan: OrderPlan | None = None
-    community_plan: OrderPlan | None = None
 
 
 class Candle(FrozenModel):

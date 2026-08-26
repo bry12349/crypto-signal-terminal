@@ -12,6 +12,7 @@ from crypto_signal_terminal.domain.models import (
     SourceKind,
 )
 from crypto_signal_terminal.engines.common import basic_order_plan
+from crypto_signal_terminal.engines.evidence_fusion import EvidenceFusion
 
 
 def _decimal(snapshot: MarketSnapshot, key: str, default: str = "0") -> Decimal:
@@ -19,6 +20,9 @@ def _decimal(snapshot: MarketSnapshot, key: str, default: str = "0") -> Decimal:
 
 
 class TrendEngine:
+    def __init__(self) -> None:
+        self.fusion = EvidenceFusion()
+
     def evaluate(self, snapshot: MarketSnapshot) -> Opportunity | None:
         if not snapshot.data_health.healthy or snapshot.symbol not in {"BTCUSDT", "ETHUSDT"}:
             return None
@@ -46,34 +50,45 @@ class TrendEngine:
                 value=_decimal(snapshot, "aggressive_flow_imbalance"),
             ),
         )
-        if not matching_trigger or not flow_confirmed or not liquid_enough:
+        order_type = OrderType.MARKET if abs(_decimal(snapshot, "aggressive_flow_imbalance")) >= Decimal("0.45") else OrderType.LIMIT
+        candidate_plan = basic_order_plan(snapshot, direction, order_type=order_type, ttl_minutes=5)
+        analysis = self.fusion.evaluate(
+            snapshot,
+            direction=direction,
+            reward_to_risk=candidate_plan.reward_to_risk,
+            signal_type="trend_continuation",
+        )
+        evidence = evidence + (
+            Evidence(code="tp_before_sl", text="模型估计 TP 先于 SL 的概率", weight=16, value=analysis.p_tp_before_sl),
+            Evidence(code="expected_value", text="计入费用与滑点后的净期望值", weight=16, value=analysis.expected_value),
+        )
+        if not matching_trigger or not flow_confirmed or not liquid_enough or not analysis.is_tradeable:
             return Opportunity(
                 id=f"trend:{snapshot.symbol}:armed",
                 symbol=snapshot.symbol,
                 source=SourceKind.NATIVE,
                 state=LifecycleState.ARMED,
-                confidence=66,
+                confidence=analysis.confidence,
                 created_at=snapshot.observed_at,
                 updated_at=snapshot.observed_at,
                 evidence=evidence,
                 data_health=snapshot.data_health,
                 title="等待顺势回调触发",
-                risk="5m 触发、主动订单流或盘口滑点尚未通过",
+                risk="5m 触发、订单流、流动性或净期望值门槛尚未通过",
+                analysis=analysis,
             )
-        flow = abs(_decimal(snapshot, "aggressive_flow_imbalance"))
-        order_type = OrderType.MARKET if flow >= Decimal("0.45") else OrderType.LIMIT
-        plan = basic_order_plan(snapshot, direction, order_type=order_type, ttl_minutes=5)
         return Opportunity(
             id=f"trend:{snapshot.symbol}:entry",
             symbol=snapshot.symbol,
             source=SourceKind.NATIVE,
             state=LifecycleState.ENTRY_VALID,
-            confidence=min(92, 72 + int(flow * 20)),
+            confidence=analysis.confidence,
             created_at=snapshot.observed_at,
             updated_at=snapshot.observed_at,
             evidence=evidence,
             data_health=snapshot.data_health,
-            order_plan=plan,
+            order_plan=candidate_plan,
             title="日内趋势跟随",
             risk="触及结构止损则趋势判断失效",
+            analysis=analysis,
         )

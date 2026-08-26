@@ -9,17 +9,15 @@ from decimal import Decimal
 import uvicorn
 
 from crypto_signal_terminal.api import ApplicationState, create_app
-from crypto_signal_terminal.confirmation import ConfirmationEngine
-from crypto_signal_terminal.config import KeyringSecretStore, Settings
-from crypto_signal_terminal.domain.models import DataHealth, Direction, MarketSnapshot, TelegramSignal
+from crypto_signal_terminal.config import KeyringSecretStore, MemorySecretStore, SecretStore, Settings
+from crypto_signal_terminal.domain.models import DataHealth, MarketSnapshot
 from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
 from crypto_signal_terminal.market.live import BybitCompositeMarketClient
 from crypto_signal_terminal.market.scanner import LiveMarketScanner
+from crypto_signal_terminal.market.universe import MajorExchangeHotUniverse
 from crypto_signal_terminal.storage import AuditStore
-from crypto_signal_terminal.telegram.coordinator import TelegramSignalCoordinator
-from crypto_signal_terminal.telegram.notifier import TelegramBotNotifier
 
 
 DEMO_TIME = datetime(2026, 8, 1, 8, 0, tzinfo=UTC)
@@ -57,27 +55,11 @@ def build_demo_state() -> ApplicationState:
     trend = TrendEngine().evaluate(btc)
     alt = AltcoinEngine().evaluate(sol)
     smart = SmartMoneyEngine().evaluate_flow(sol)
-    signal = TelegramSignal(
-        account_id="demo",
-        channel_id=1001,
-        message_id=77,
-        published_at=DEMO_TIME - timedelta(seconds=12),
-        raw_text="SOL short entry 146.2-146.5 sl 147.4 tp 144.6 142.9",
-        symbol="SOLUSDT",
-        direction=Direction.SHORT,
-        entry_low=Decimal("146.2"),
-        entry_high=Decimal("146.5"),
-        stop=Decimal("147.4"),
-        targets=(Decimal("144.6"), Decimal("142.9")),
-        parse_confidence=100,
-    )
-    confirmation = ConfirmationEngine().confirm(signal, sol, analyzed_at=DEMO_TIME)
     state = ApplicationState(
         mode="demo",
         opportunities=[item for item in (trend, alt) if item is not None],
         smart_money=[item for item in (smart,) if item is not None],
-        confirmations=[confirmation],
-        credentials={"telegram": False, "bot": False, "dune": False},
+        credentials={"dune": False},
         market_health="healthy",
     )
     state.market_health_registry.set_watchlist((btc.symbol, sol.symbol))
@@ -94,7 +76,6 @@ def run_demo_replay() -> tuple[str, ...]:
     state = build_demo_state()
     ids = [item.id for item in state.opportunities]
     ids.extend(item.id for item in state.smart_money)
-    ids.extend(item.id for item in state.confirmations)
     return tuple(ids)
 
 
@@ -106,6 +87,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def parent_is_gone(*, initial_parent: int, current_parent: int) -> bool:
     return initial_parent != 1 and current_parent == 1
+
+
+def secret_store_for_mode(mode: str) -> SecretStore:
+    """Demo launches must be fully self-contained and never prompt for Keychain."""
+    return MemorySecretStore() if mode == "demo" else KeyringSecretStore()
 
 
 async def exit_when_parent_is_gone(stop: asyncio.Event) -> None:
@@ -121,41 +107,27 @@ async def exit_when_parent_is_gone(stop: asyncio.Event) -> None:
 
 def run() -> None:
     args = parse_args()
-    secrets = KeyringSecretStore()
+    secrets = secret_store_for_mode(os.getenv("CST_MODE", "live"))
     settings = Settings.from_environment(secrets)
     state = build_demo_state() if settings.mode == "demo" else build_live_state()
     state.credentials = settings.credential_status()
     state.dune_health = "configured_not_running" if state.credentials.get("dune") else "not_configured"
-    state.telegram_authorized = bool(secrets.get("telegram_session"))
-    audit_key = secrets.get("audit_encryption_key")
-    if not audit_key:
-        audit_key = AuditStore.generate_key().decode("ascii")
-        secrets.set("audit_encryption_key", audit_key)
-    store = AuditStore(settings.runtime_dir.expanduser() / "audit.sqlite3", encryption_key=audit_key.encode("ascii"))
+    store = AuditStore(settings.runtime_dir.expanduser() / "audit.sqlite3")
     state.paper_orders = list(reversed(store.paper_orders(limit=200)))
 
-    def notifier_factory() -> TelegramBotNotifier | None:
-        token = secrets.get("telegram_bot_token")
-        chat_id = secrets.get("telegram_chat_id")
-        if not token or not chat_id:
-            return None
-        return TelegramBotNotifier(bot_token=token, chat_id=chat_id, store=store)
-
     live_market = BybitCompositeMarketClient()
-    coordinator = TelegramSignalCoordinator(
-        state=state,
-        store=store,
-        market=live_market,
-        secrets=secrets,
-        notifier_factory=notifier_factory,
-    )
-    scanner = LiveMarketScanner(state=state, market=live_market)
+    hot_universe = MajorExchangeHotUniverse()
+    scanner = LiveMarketScanner(state=state, market=live_market, universe=hot_universe)
 
     async def background(stop):
         services = [exit_when_parent_is_gone(stop)]
         if settings.mode != "demo":
-            services.extend((coordinator.run(stop), scanner.run(stop)))
-        await asyncio.gather(*services)
+            services.append(scanner.run(stop))
+        try:
+            await asyncio.gather(*services)
+        finally:
+            await live_market.close()
+            await hot_universe.close()
 
     uvicorn.run(
         create_app(state, secret_store=secrets, audit_store=store, background_runner=background),

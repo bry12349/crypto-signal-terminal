@@ -11,8 +11,6 @@ describe("StatusStrip", () => {
     const health: Health = {
       mode: "live",
       market: "degraded",
-      telegram: "not_configured",
-      bot: "not_configured",
       dune: "not_configured",
       market_detail: {
         overall: "degraded",

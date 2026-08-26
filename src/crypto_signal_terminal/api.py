@@ -12,10 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from crypto_signal_terminal.config import KeyringSecretStore, SecretStore
-from crypto_signal_terminal.domain.models import ConfirmationResult, Opportunity, SmartMoneyCandidate
+from crypto_signal_terminal.domain.models import Opportunity, SmartMoneyCandidate
 from crypto_signal_terminal.market.health import MarketHealthRegistry
 from crypto_signal_terminal.storage import AuditStore
-from crypto_signal_terminal.telegram.auth import TelegramLoginManager
 
 
 @dataclass
@@ -23,10 +22,7 @@ class ApplicationState:
     mode: str = "demo"
     opportunities: list[Opportunity] = field(default_factory=list)
     smart_money: list[SmartMoneyCandidate] = field(default_factory=list)
-    confirmations: list[ConfirmationResult] = field(default_factory=list)
-    credentials: dict[str, bool] = field(default_factory=lambda: {"telegram": False, "bot": False, "dune": False})
-    telegram_channels: list[dict] = field(default_factory=list)
-    telegram_authorized: bool = False
+    credentials: dict[str, bool] = field(default_factory=lambda: {"dune": False})
     market_health: str = "healthy"
     market_health_registry: MarketHealthRegistry = field(default_factory=MarketHealthRegistry)
     paper_orders: list[dict] = field(default_factory=list)
@@ -39,7 +35,6 @@ class ApplicationState:
             "mode": self.mode,
             "opportunities": [item.model_dump(mode="json") for item in self.opportunities],
             "smart_money": [item.model_dump(mode="json") for item in self.smart_money],
-            "confirmations": [item.model_dump(mode="json") for item in self.confirmations],
             "candles": self.market_candles,
         }
 
@@ -56,16 +51,8 @@ class PaperOrderRequest(BaseModel):
 
 
 class CredentialsInput(BaseModel):
-    telegram_api_id: int | None = None
-    telegram_api_hash: str | None = None
-    telegram_bot_token: str | None = None
-    telegram_chat_id: str | None = None
     dune_api_key: str | None = None
     dune_query_id: int | None = None
-
-
-class TelegramPasswordInput(BaseModel):
-    password: str
 
 
 def create_app(
@@ -90,8 +77,7 @@ def create_app(
             if task:
                 await task
 
-    app = FastAPI(title="Crypto Signal Terminal", version="0.2.0", lifespan=lifespan)
-    login_manager = TelegramLoginManager(secrets)
+    app = FastAPI(title="Crypto Signal Terminal", version="0.4.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:1420", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost"],
@@ -111,8 +97,6 @@ def create_app(
             "mode": runtime.mode,
             "market": market["overall"] if market["expected_count"] else runtime.market_health,
             "market_detail": market,
-            "telegram": "healthy" if runtime.telegram_authorized else "configured" if runtime.credentials.get("telegram") else "not_configured",
-            "bot": "healthy" if runtime.credentials.get("bot") else "not_configured",
             "dune": runtime.dune_health if runtime.credentials.get("dune") else "not_configured",
         }
 
@@ -126,14 +110,6 @@ def create_app(
         for name, value in values.items():
             secrets.set(name, str(value))
         runtime.credentials = {
-            "telegram": bool(
-                (values.get("telegram_api_id") or secrets.get("telegram_api_id"))
-                and (values.get("telegram_api_hash") or secrets.get("telegram_api_hash"))
-            ),
-            "bot": bool(
-                (values.get("telegram_bot_token") or secrets.get("telegram_bot_token"))
-                and (values.get("telegram_chat_id") or secrets.get("telegram_chat_id"))
-            ),
             "dune": bool(
                 (values.get("dune_api_key") or secrets.get("dune_api_key"))
                 and (values.get("dune_query_id") or secrets.get("dune_query_id"))
@@ -142,41 +118,11 @@ def create_app(
         runtime.dune_health = "configured_not_running" if runtime.credentials["dune"] else "not_configured"
         return runtime.credentials
 
-    @app.get("/api/v1/telegram/channels")
-    async def telegram_channels() -> list[dict]:
-        return runtime.telegram_channels
-
-    @app.post("/api/v1/telegram/login/qr")
-    async def telegram_login_qr() -> dict[str, str | None]:
-        try:
-            return await login_manager.start()
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.get("/api/v1/telegram/login/status")
-    async def telegram_login_status() -> dict[str, str | None]:
-        result = login_manager.status()
-        if result["status"] == "authorized":
-            runtime.telegram_authorized = True
-        elif result["status"] in {"expired", "error"}:
-            runtime.telegram_authorized = False
-        return result
-
-    @app.post("/api/v1/telegram/login/password")
-    async def telegram_login_password(payload: TelegramPasswordInput) -> dict[str, str | None]:
-        try:
-            result = await login_manager.complete_password(payload.password)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        runtime.telegram_authorized = result["status"] == "authorized"
-        return result
-
     @app.post("/api/v1/paper-orders", status_code=status.HTTP_201_CREATED)
     async def prepare_paper_order(request: PaperOrderRequest) -> dict:
         opportunity = next((item for item in runtime.opportunities if item.id == request.opportunity_id), None)
-        confirmation = next((item for item in runtime.confirmations if item.id == request.opportunity_id), None)
-        plan = opportunity.order_plan if opportunity is not None else confirmation.order_plan if confirmation is not None else None
-        symbol = opportunity.symbol if opportunity is not None else confirmation.signal.symbol if confirmation is not None else None
+        plan = opportunity.order_plan if opportunity is not None else None
+        symbol = opportunity.symbol if opportunity is not None else None
         if plan is None or symbol is None:
             raise HTTPException(status_code=404, detail="Actionable opportunity not found")
         now = clock()

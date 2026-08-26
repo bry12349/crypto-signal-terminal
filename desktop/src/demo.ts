@@ -81,19 +81,4 @@ export const demoSnapshot: Snapshot = {
       ],
     },
   ],
-  confirmations: [
-    {
-      id: "telegram:demo",
-      verdict: "CONFIRMED",
-      confidence: 84,
-      analyzed_at: now,
-      evidence: [
-        { code: "trend", text: "频道方向与 1h 空头结构一致", weight: 18 },
-        { code: "flow", text: "主动卖出与 OI 同步确认", weight: 16 },
-      ],
-      reason_codes: [],
-      signal: { symbol: "SOLUSDT", direction: "SHORT", channel_id: 1001 },
-      order_plan: null,
-    },
-  ],
 };

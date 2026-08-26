@@ -1,10 +1,10 @@
-import { Activity, Bot, Radio, ShieldCheck, WalletCards } from "lucide-react";
+import { Activity, Radio, ShieldCheck, WalletCards } from "lucide-react";
 import type { Health, Opportunity } from "../types";
 
 export function StatusStrip({ health, connected, items }: { health: Health; connected: boolean; items: Opportunity[] }) {
   const btc = items.find((item) => item.symbol === "BTCUSDT" && item.source === "NATIVE");
   const btcRegime = btc?.order_plan?.direction === "LONG" ? "BTC 日内偏多" : btc?.order_plan?.direction === "SHORT" ? "BTC 日内偏空" : "BTC 等待结构";
-  const altCount = items.filter((item) => item.source === "NATIVE" && !["BTCUSDT", "ETHUSDT"].includes(item.symbol)).length;
+  const altCount = items.filter((item) => item.source === "NATIVE" && item.state !== "FORMING" && !["BTCUSDT", "ETHUSDT"].includes(item.symbol)).length;
   const connectionLabel = !connected ? "本地服务离线" : health.mode === "live" ? "实时扫描" : "演示数据";
   const coverage = health.market_detail.expected_count
     ? `${health.market_detail.healthy_count}/${health.market_detail.expected_count} 币种健康`
@@ -20,7 +20,6 @@ export function StatusStrip({ health, connected, items }: { health: Health; conn
       <div className={`connection ${connected && health.mode === "live" ? "live" : "demo"}`}><Radio size={13} />{connectionLabel}</div>
       <div className="service-icons" aria-label="service health">
         <ShieldCheck size={14} className={health.market === "healthy" ? "ok" : "off"} />
-        <Bot size={14} className={health.telegram === "healthy" ? "ok" : "off"} />
         <WalletCards size={14} className={health.dune === "healthy" ? "ok" : "off"} />
       </div>
     </header>

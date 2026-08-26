@@ -5,19 +5,6 @@ import type { Health, Opportunity, Snapshot } from "./types";
 const API = "http://127.0.0.1:8765";
 
 function mergeSignalPaths(snapshot: Snapshot): Opportunity[] {
-  const confirmations: Opportunity[] = snapshot.confirmations.map((item) => ({
-    id: item.id,
-    symbol: item.signal.symbol ?? "UNKNOWN",
-    source: "TELEGRAM",
-    state: item.verdict === "CONFIRMED" ? "ENTRY_VALID" : item.verdict === "CONDITIONAL" ? "ARMED" : "INVALIDATED",
-    confidence: item.confidence,
-    title: `Telegram 二次确认 · ${item.verdict}`,
-    risk: item.reason_codes.join(" · ") || null,
-    source_label: `频道 ${item.signal.channel_id}`,
-    updated_at: item.analyzed_at,
-    evidence: item.evidence,
-    order_plan: item.order_plan,
-  }));
   const smart: Opportunity[] = snapshot.smart_money.map((item) => ({
     id: item.id,
     symbol: item.symbol,
@@ -31,7 +18,7 @@ function mergeSignalPaths(snapshot: Snapshot): Opportunity[] {
     evidence: item.evidence,
     order_plan: null,
   }));
-  return [...snapshot.opportunities, ...confirmations, ...smart];
+  return [...snapshot.opportunities, ...smart];
 }
 
 interface TerminalStore {
@@ -46,10 +33,10 @@ interface TerminalStore {
 }
 
 export const useTerminalStore = create<TerminalStore>((set) => ({
-  snapshot: { mode: "live", opportunities: [], smart_money: [], confirmations: [], candles: {} },
+  snapshot: { mode: "live", opportunities: [], smart_money: [], candles: {} },
   opportunities: [],
   health: {
-    mode: "demo", market: "healthy", telegram: "not_configured", bot: "not_configured", dune: "not_configured",
+    mode: "demo", market: "healthy", dune: "not_configured",
     market_detail: { overall: "connecting", healthy_count: 0, expected_count: 0, symbols: {} },
   },
   selectedId: null,

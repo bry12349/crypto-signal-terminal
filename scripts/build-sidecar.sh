@@ -14,5 +14,4 @@ OUTPUT_NAME="crypto-signal-service-${TARGET_TRIPLE}"
   --workpath "$PROJECT_ROOT/build/pyinstaller" \
   --specpath "$PROJECT_ROOT/build" \
   --collect-all keyring \
-  --collect-all qrcode \
   "$PROJECT_ROOT/scripts/service_entry.py"

@@ -1,79 +1,156 @@
-import { useEffect, useRef } from "react";
-import { createChart, CandlestickSeries, ColorType, HistogramSeries, type UTCTimestamp } from "lightweight-charts";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CandlestickSeries, ColorType, createChart, HistogramSeries, LineSeries, type IChartApi, type ISeriesApi, type Time, type UTCTimestamp } from "lightweight-charts";
 import { AlertTriangle, CheckCircle2, Clock3, Crosshair, Layers3 } from "lucide-react";
+
+import { aggregateBars, createIncrementalSeriesUpdater, formatBeijingDateTime, formatBeijingTime, type ChartBar } from "../chartController";
 import type { Candle, MarketSymbolHealth, Opportunity } from "../types";
 
-function MiniChart({ selected, candles }: { selected: Opportunity; candles: Candle[] }) {
-  const ref = useRef<HTMLDivElement>(null);
+// Bitget's documented default follows the international convention: green up, red down.
+const BITGET_UP = "#0ecb81";
+const BITGET_DOWN = "#f6465d";
+const TIMEFRAMES = [{ label: "5m", factor: 1 }, { label: "15m", factor: 3 }, { label: "1h", factor: 12 }, { label: "4h", factor: 48 }] as const;
+type Timeframe = typeof TIMEFRAMES[number]["label"];
+type PrimaryIndicator = "NONE" | "MA" | "EMA" | "BOLL";
+type SecondaryIndicator = "VOLUME" | "RSI" | "MACD";
+
+const toBars = (candles: Candle[]): ChartBar[] => candles.map((item) => ({ time: item.timestamp, open: +item.open, high: +item.high, low: +item.low, close: +item.close, volume: +item.volume }));
+
+function movingAverage(bars: ChartBar[], period: number, exponential = false) {
+  let previous = 0;
+  return bars.map((bar, index) => {
+    if (index + 1 < period) return null;
+    const value = exponential
+      ? (previous = previous ? bar.close * (2 / (period + 1)) + previous * (1 - 2 / (period + 1)) : bars.slice(0, period).reduce((sum, item) => sum + item.close, 0) / period)
+      : bars.slice(index - period + 1, index + 1).reduce((sum, item) => sum + item.close, 0) / period;
+    return { time: bar.time as UTCTimestamp, value };
+  }).filter((item): item is { time: UTCTimestamp; value: number } => item !== null);
+}
+
+function bollingerBands(bars: ChartBar[], period = 20) {
+  const upper: { time: UTCTimestamp; value: number }[] = [];
+  const middle: { time: UTCTimestamp; value: number }[] = [];
+  const lower: { time: UTCTimestamp; value: number }[] = [];
+  bars.forEach((bar, index) => {
+    if (index + 1 < period) return;
+    const sample = bars.slice(index - period + 1, index + 1).map((item) => item.close);
+    const mean = sample.reduce((sum, value) => sum + value, 0) / sample.length;
+    const deviation = Math.sqrt(sample.reduce((sum, value) => sum + (value - mean) ** 2, 0) / sample.length);
+    const time = bar.time as UTCTimestamp;
+    upper.push({ time, value: mean + deviation * 2 }); middle.push({ time, value: mean }); lower.push({ time, value: mean - deviation * 2 });
+  });
+  return [upper, middle, lower];
+}
+
+function rsiData(bars: ChartBar[]) {
+  return bars.map((bar, index) => {
+    const window = bars.slice(Math.max(1, index - 13), index + 1);
+    if (window.length < 2) return null;
+    const changes = window.slice(1).map((item, offset) => item.close - window[offset].close);
+    const gain = changes.reduce((sum, value) => sum + Math.max(value, 0), 0) / changes.length;
+    const loss = changes.reduce((sum, value) => sum + Math.max(-value, 0), 0) / changes.length;
+    return { time: bar.time as UTCTimestamp, value: loss === 0 ? 100 : 100 - 100 / (1 + gain / loss) };
+  }).filter((item): item is { time: UTCTimestamp; value: number } => item !== null);
+}
+
+function macdData(bars: ChartBar[]) {
+  return bars.map((bar, index) => {
+    const fast = movingAverage(bars.slice(0, index + 1), 7, true).at(-1)?.value;
+    const slow = movingAverage(bars.slice(0, index + 1), 14, true).at(-1)?.value;
+    return fast === undefined || slow === undefined ? null : { time: bar.time as UTCTimestamp, value: fast - slow, color: fast >= slow ? "rgba(14, 203, 129, .65)" : "rgba(246, 70, 93, .65)" };
+  }).filter((item): item is { time: UTCTimestamp; value: number; color: string } => item !== null);
+}
+
+function MiniChart({ selected, candles, timeframe, primary, secondary }: { selected: Opportunity; candles: Candle[]; timeframe: Timeframe; primary: PrimaryIndicator; secondary: SecondaryIndicator }) {
+  const host = useRef<HTMLDivElement>(null);
+  const chart = useRef<IChartApi | null>(null);
+  const candle = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volume = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const updater = useRef<ReturnType<typeof createIncrementalSeriesUpdater> | null>(null);
+  const viewKey = useRef<string | null>(null);
+  const factor = TIMEFRAMES.find((item) => item.label === timeframe)!.factor;
+  const data = useMemo(() => aggregateBars(toBars(candles), factor), [candles, factor]);
 
   useEffect(() => {
-    if (!ref.current) return;
-    const chart = createChart(ref.current, {
-      width: ref.current.clientWidth,
-      height: ref.current.clientHeight,
-      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#687386", fontFamily: "IBM Plex Mono, monospace" },
-      grid: { vertLines: { color: "rgba(64,72,88,.12)" }, horzLines: { color: "rgba(64,72,88,.12)" } },
-      rightPriceScale: { borderColor: "rgba(85,95,112,.22)" },
-      timeScale: { borderColor: "rgba(85,95,112,.22)", timeVisible: true, secondsVisible: false },
-      crosshair: { vertLine: { color: "#5d6c84", width: 1 }, horzLine: { color: "#5d6c84", width: 1 } },
+    if (!host.current) return;
+    const instance = createChart(host.current, {
+      width: host.current.clientWidth, height: host.current.clientHeight,
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#718096", fontFamily: "IBM Plex Mono, monospace" },
+      localization: { timeFormatter: (time: Time) => formatBeijingDateTime(time as number) },
+      grid: { vertLines: { color: "rgba(52, 69, 91, .18)" }, horzLines: { color: "rgba(52, 69, 91, .18)" } },
+      timeScale: { timeVisible: true, secondsVisible: false, tickMarkFormatter: (time: Time) => formatBeijingTime(typeof time === "number" ? time : 0) },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }, handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
     });
-    const series = chart.addSeries(CandlestickSeries, { upColor: "#22c78b", downColor: "#f15b6c", wickUpColor: "#22c78b", wickDownColor: "#f15b6c", borderVisible: false });
-    series.setData(candles.map((item) => ({
-      time: item.timestamp as UTCTimestamp,
-      open: Number(item.open), high: Number(item.high), low: Number(item.low), close: Number(item.close),
-    })));
-    const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "" });
-    volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    volume.setData(candles.map((item) => ({ time: item.timestamp as UTCTimestamp, value: Number(item.volume), color: Number(item.close) >= Number(item.open) ? "rgba(34,199,139,.26)" : "rgba(241,91,108,.26)" })));
-    if (selected.order_plan) {
-      series.createPriceLine({ price: Number(selected.order_plan.stop), color: "#f15b6c", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "SL" });
-      selected.order_plan.targets.forEach((target, index) => series.createPriceLine({ price: Number(target), color: "#22c78b", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `TP${index + 1}` }));
+    const candleSeries = instance.addSeries(CandlestickSeries, { upColor: BITGET_UP, downColor: BITGET_DOWN, wickUpColor: BITGET_UP, wickDownColor: BITGET_DOWN, borderVisible: false });
+    const subPane = instance.addPane(true);
+    subPane.setHeight(108);
+    const volumeSeries = instance.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1);
+    chart.current = instance; candle.current = candleSeries; volume.current = volumeSeries;
+    updater.current = createIncrementalSeriesUpdater({ setData: (values) => candleSeries.setData(values.map(({ volume: _volume, ...bar }) => ({ ...bar, time: bar.time as UTCTimestamp }))), update: ({ volume: _volume, ...bar }) => candleSeries.update({ ...bar, time: bar.time as UTCTimestamp }) });
+    const resize = new ResizeObserver(([entry]) => instance.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height }));
+    resize.observe(host.current); return () => { resize.disconnect(); instance.remove(); };
+  }, []);
+
+  useEffect(() => {
+    if (!data.length) return;
+    updater.current?.sync(`${selected.symbol}:${timeframe}`, data);
+    const nextViewKey = `${selected.symbol}:${timeframe}`;
+    if (viewKey.current !== nextViewKey) { viewKey.current = nextViewKey; chart.current?.timeScale().fitContent(); }
+    chart.current?.timeScale().scrollToRealTime();
+  }, [data, selected.symbol, timeframe]);
+
+  useEffect(() => {
+    if (!chart.current || !volume.current) return;
+    const old = volume.current;
+    chart.current.removeSeries(old);
+    const series = secondary === "VOLUME"
+      ? chart.current.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1)
+      : chart.current.addSeries(LineSeries, { color: secondary === "RSI" ? "#d7a84e" : "#b58cff", lineWidth: 1, lastValueVisible: true, priceLineVisible: false }, 1);
+    volume.current = series as ISeriesApi<"Histogram">;
+    if (secondary === "VOLUME") (series as ISeriesApi<"Histogram">).setData(data.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: bar.close >= bar.open ? "rgba(14, 203, 129, .50)" : "rgba(246, 70, 93, .50)" })));
+    else if (secondary === "RSI") (series as ISeriesApi<"Line">).setData(rsiData(data));
+    else (series as ISeriesApi<"Line">).setData(macdData(data));
+    return () => { if (chart.current) chart.current.removeSeries(series); if (volume.current === series) volume.current = null; };
+  }, [data, secondary]);
+
+  useEffect(() => {
+    if (!chart.current || primary === "NONE") return;
+    const settings = { lineWidth: 1 as const, lastValueVisible: false, priceLineVisible: false };
+    if (primary === "BOLL") {
+      const lines = ["#9b8cff", "#d7a84e", "#9b8cff"].map((color) => chart.current!.addSeries(LineSeries, { ...settings, color }));
+      bollingerBands(data).forEach((band, index) => lines[index].setData(band));
+      return () => lines.forEach((line) => chart.current?.removeSeries(line));
     }
-    chart.timeScale().fitContent();
-    const resize = new ResizeObserver(([entry]) => chart.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    resize.observe(ref.current);
-    return () => { resize.disconnect(); chart.remove(); };
-  }, [candles, selected]);
-  return <div className="chart" ref={ref} />;
+    const line = chart.current.addSeries(LineSeries, { ...settings, color: primary === "EMA" ? "#f7b955" : "#38bdf8" });
+    line.setData(movingAverage(data, primary === "EMA" ? 12 : 20, primary === "EMA"));
+    return () => chart.current?.removeSeries(line);
+  }, [data, primary]);
+
+  useEffect(() => {
+    if (!candle.current || !selected.order_plan) return;
+    const series = candle.current;
+    const stop = series.createPriceLine({ price: +selected.order_plan.stop, color: BITGET_DOWN, lineWidth: 1, lineStyle: 2, title: "SL" });
+    const targets = selected.order_plan.targets.map((target, index) => series.createPriceLine({ price: +target, color: BITGET_UP, lineWidth: 1, lineStyle: 2, title: `TP${index + 1}` }));
+    return () => { series.removePriceLine(stop); targets.forEach((line) => series.removePriceLine(line)); };
+  }, [selected]);
+
+  return <div className="chart" ref={host} aria-label={`北京时间 ${timeframe} K 线图`} />;
+}
+
+function AnalysisStrip({ selected }: { selected: Opportunity }) {
+  const analysis = selected.analysis;
+  if (!analysis) return null;
+  return <div className="analysis-strip"><span><small>EDGE</small><strong>{analysis.opportunity_score}</strong></span><span><small>P(TP&gt;SL)</small><strong>{(Number(analysis.p_tp_before_sl) * 100).toFixed(1)}%</strong></span><span><small>EV</small><strong className={Number(analysis.expected_value) > 0 ? "positive" : "negative"}>{analysis.expected_value}</strong></span><span><small>{analysis.market_regime}</small><strong>{analysis.signal_type}</strong></span><div className="analysis-biases"><span>SMART {analysis.smart_money_bias}</span><span>DERIVATIVES {analysis.derivatives_bias}</span><span>FLOW {analysis.order_flow_bias}</span><span>NEWS {analysis.news_bias}</span></div></div>;
 }
 
 export function SignalCanvas({ selected, candles, mode, health }: { selected: Opportunity | null; candles: Candle[]; mode: string; health: MarketSymbolHealth | undefined }) {
+  const [timeframe, setTimeframe] = useState<Timeframe>("5m");
+  const [primary, setPrimary] = useState<PrimaryIndicator>("MA");
+  const [secondary, setSecondary] = useState<SecondaryIndicator>("VOLUME");
   if (!selected) return <main className="signal-canvas empty-canvas"><Crosshair size={26} /><h2>当前无可执行机会</h2><p>只有满足触发、流动性与风控条件的结构才会出现在这里。</p></main>;
-  const direction = selected.order_plan?.direction;
-  const base = selected.symbol.replace("USDT", "");
-  const healthLabel = health?.status === "healthy"
-    ? `${base} 行情健康`
-    : health?.status === "degraded"
-      ? `${base} 行情降级`
-      : health?.status === "unavailable"
-        ? `${base} 行情不可用`
-        : `${base} 行情待确认`;
-  return (
-    <main className="signal-canvas">
-      <div className="instrument-head">
-        <div><span className="eyebrow">SELECTED INSTRUMENT</span><h1>{selected.symbol.replace("USDT", "")}<small> / USDT PERP</small></h1></div>
-        <div className={`direction-lock ${direction?.toLowerCase() ?? "watch"}`}><span>{direction ?? "WATCH"}</span><strong>{selected.confidence}</strong><small>结构可信度</small></div>
-      </div>
-      <div className="setup-ribbon">
-        <span><Layers3 size={14} />{selected.title}</span>
-        <span><Clock3 size={14} />{selected.state === "ENTRY_VALID" ? "有效窗口开启" : "等待触发"}</span>
-        <span className={`data-fresh ${health?.status === "healthy" ? "" : "unhealthy"}`}>
-          {health?.status === "healthy" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{healthLabel}
-        </span>
-      </div>
-      <div className="chart-shell">
-        {mode === "live" && candles.length ? <MiniChart selected={selected} candles={candles} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>暂无可验证的实时 K 线</strong><span>不会用模拟走势替代真实行情</span></div>}
-        <div className="chart-watermark">{mode === "live" && candles.length ? "5m · BYBIT PUBLIC" : "NO MARKET DATA"}</div>
-      </div>
-      <section className="evidence-panel">
-        <div className="section-title"><div><span className="eyebrow">WHY NOW</span><h3>核心证据</h3></div><button>展开原始数据</button></div>
-        <div className="evidence-grid">
-          {selected.evidence.slice(0, 3).map((item, index) => (
-            <article key={item.code}><span>0{index + 1}</span><div><strong>{item.text}</strong><small>{item.value ? `实时值 ${item.value}` : "多源数据已确认"}</small></div><CheckCircle2 size={17} /></article>
-          ))}
-        </div>
-        {selected.risk && <div className="risk-line"><AlertTriangle size={15} /><strong>主要风险</strong><span>{selected.risk}</span></div>}
-      </section>
-    </main>
-  );
+  const direction = selected.order_plan?.direction; const base = selected.symbol.replace("USDT", "");
+  const healthLabel = health?.status === "healthy" ? `${base} 行情健康` : health?.status === "degraded" ? `${base} 行情降级` : health?.status === "unavailable" ? `${base} 行情不可用` : `${base} 行情待确认`;
+  return <main className="signal-canvas"><div className="instrument-head"><div><span className="eyebrow">SELECTED INSTRUMENT · UTC+8</span><h1>{base}<small> / USDT PERP</small></h1></div><div className={`direction-lock ${direction?.toLowerCase() ?? "watch"}`}><span>{direction ?? "NO TRADE"}</span><strong>{selected.confidence}</strong><small>{selected.state === "FORMING" ? "观察强度" : "结构可信度"}</small></div></div>
+    <div className="setup-ribbon"><span><Layers3 size={14} />{selected.title}</span><span><Clock3 size={14} />{selected.state === "ENTRY_VALID" ? "有效窗口开启" : "等待触发"}</span><span className={`data-fresh ${health?.status === "healthy" ? "" : "unhealthy"}`}>{health?.status === "healthy" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{healthLabel}</span></div>
+    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button key={item.label} className={timeframe === item.label ? "active" : ""} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option></select></label></div>{mode === "live" && candles.length ? <MiniChart selected={selected} candles={candles} timeframe={timeframe} primary={primary} secondary={secondary} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>暂无可验证的实时 K 线</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && candles.length ? `${timeframe} · BYBIT PUBLIC · UTC+8` : "NO MARKET DATA"}</div></div>
+    <section className="evidence-panel"><AnalysisStrip selected={selected} /><div className="section-title"><div><span className="eyebrow">WHY NOW</span><h3>核心证据</h3></div></div><div className="evidence-grid">{selected.evidence.slice(0, 3).map((item, index) => <article key={item.code}><span>0{index + 1}</span><div><strong>{item.text}</strong><small>{item.value ? `实时值 ${item.value}` : "多源数据已确认"}</small></div><CheckCircle2 size={17} /></article>)}</div>{selected.risk && <div className="risk-line"><AlertTriangle size={15} /><strong>主要风险</strong><span>{selected.risk}</span></div>}</section></main>;
 }

@@ -1,4 +1,6 @@
-import { BrainCircuit, RadioTower, Send, Zap } from "lucide-react";
+import { useMemo, useState } from "react";
+import { BrainCircuit, RadioTower, Zap } from "lucide-react";
+
 import type { Opportunity } from "../types";
 
 const priority: Record<Opportunity["state"], number> = {
@@ -11,46 +13,40 @@ const labels: Record<Opportunity["state"], string> = {
   INVALIDATED: "已失效", EXPIRED: "已过期", CLOSED: "已结束",
 };
 
+const filters = ["全部", "主流", "山寨", "聪明钱"] as const;
+type Filter = typeof filters[number];
+
 function SourceIcon({ source }: { source: Opportunity["source"] }) {
-  if (source === "TELEGRAM") return <Send size={13} />;
   if (source === "SMART_MONEY") return <BrainCircuit size={13} />;
   if (source === "NATIVE") return <Zap size={13} />;
   return <RadioTower size={13} />;
 }
 
+function matchesFilter(item: Opportunity, filter: Filter) {
+  if (filter === "全部") return true;
+  if (filter === "聪明钱") return item.source === "SMART_MONEY";
+  if (filter === "主流") return item.symbol === "BTCUSDT" || item.symbol === "ETHUSDT";
+  return item.source !== "SMART_MONEY" && item.symbol !== "BTCUSDT" && item.symbol !== "ETHUSDT";
+}
+
 export function OpportunityStream({ items, selectedId, onSelect }: { items: Opportunity[]; selectedId: string | null; onSelect: (id: string) => void }) {
-  const sorted = [...items].sort((a, b) => priority[a.state] - priority[b.state] || b.confidence - a.confidence);
-  return (
-    <aside className="opportunity-rail">
-      <div className="rail-heading">
-        <div><span className="eyebrow">LIVE RADAR</span><h2>机会流</h2></div>
-        <span className="count-badge">{sorted.length}</span>
-      </div>
-      <div className="filter-row"><button className="active">全部</button><button>主流</button><button>山寨</button><button>社区</button></div>
-      <div className="opportunity-list">
-        {sorted.length === 0 && <div className="empty-state"><RadioTower size={22} /><strong>当前无可执行机会</strong><span>系统正在等待高质量结构</span></div>}
-        {sorted.map((item) => {
-          const direction = item.order_plan?.direction;
-          return (
-            <button
-              type="button"
-              key={item.id}
-              data-testid="opportunity"
-              className={`opportunity-card ${selectedId === item.id ? "selected" : ""} ${direction?.toLowerCase() ?? "neutral"}`}
-              onClick={() => onSelect(item.id)}
-            >
-              <div className="card-topline">
-                <span className="source-tag"><SourceIcon source={item.source} />{item.source === "TELEGRAM" ? "社区" : item.source === "SMART_MONEY" ? "聪明钱" : "原生"}</span>
-                <span className={`state-dot ${item.state.toLowerCase()}`}>{labels[item.state]}</span>
-              </div>
-              <div className="symbol-line"><strong>{item.symbol.replace("USDT", "")}</strong><span>/ USDT</span><em>{item.confidence}</em></div>
-              <div className="card-title">{item.title ?? "市场结构机会"}</div>
-              <div className="micro-evidence">{item.evidence[0]?.text ?? "等待更多确认"}</div>
-              <div className="confidence-track"><i style={{ width: `${item.confidence}%` }} /></div>
-            </button>
-          );
-        })}
-      </div>
-    </aside>
-  );
+  const [filter, setFilter] = useState<Filter>("全部");
+  const sorted = useMemo(() => items.filter((item) => matchesFilter(item, filter)).sort((a, b) => priority[a.state] - priority[b.state] || b.confidence - a.confidence), [items, filter]);
+  return <aside className="opportunity-rail">
+    <div className="rail-heading"><div><span className="eyebrow">LIVE RADAR</span><h2>机会流</h2></div><span className="count-badge">{sorted.length}</span></div>
+    <div className="filter-row">{filters.map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
+    <div className="opportunity-list">
+      {sorted.length === 0 && <div className="empty-state"><RadioTower size={22} /><strong>当前无可执行机会</strong><span>系统正在等待高质量结构</span></div>}
+      {sorted.map((item) => {
+        const direction = item.order_plan?.direction;
+        return <button type="button" key={item.id} data-testid="opportunity" className={`opportunity-card ${selectedId === item.id ? "selected" : ""} ${direction?.toLowerCase() ?? "neutral"}`} onClick={() => onSelect(item.id)}>
+          <div className="card-topline"><span className="source-tag"><SourceIcon source={item.source} />{item.source === "SMART_MONEY" ? "聪明钱" : "原生"}</span><span className="state-label"><i className={`state-dot ${item.state.toLowerCase()}`} />{labels[item.state]}</span></div>
+          <div className="symbol-line"><strong>{item.symbol.replace("USDT", "")}</strong><span className="contract-label">USDT PERP</span><em>{item.confidence}</em></div>
+          <div className="card-title">{item.title ?? "市场结构机会"}</div>
+          <div className="micro-evidence">{item.evidence[0]?.text ?? "等待更多确认"}</div>
+          <div className="confidence-track"><i style={{ width: `${item.confidence}%` }} /></div>
+        </button>;
+      })}
+    </div>
+  </aside>;
 }

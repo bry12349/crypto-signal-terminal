@@ -38,10 +38,6 @@ class MemorySecretStore:
 class Settings:
     mode: str
     runtime_dir: Path
-    telegram_api_id: int | None
-    telegram_api_hash: str | None
-    telegram_bot_token: str | None
-    telegram_chat_id: str | None
     dune_api_key: str | None
     dune_query_id: int | None
 
@@ -60,17 +56,11 @@ class Settings:
         return cls(
             mode=os.getenv("CST_MODE", "live"),
             runtime_dir=Path(os.getenv("CST_RUNTIME_DIR", str(Path.home() / ".crypto-signal-terminal"))),
-            telegram_api_id=integer("TELEGRAM_API_ID"),
-            telegram_api_hash=text("TELEGRAM_API_HASH", "telegram_api_hash"),
-            telegram_bot_token=text("TELEGRAM_BOT_TOKEN", "telegram_bot_token"),
-            telegram_chat_id=text("TELEGRAM_CHAT_ID", "telegram_chat_id"),
             dune_api_key=text("DUNE_API_KEY", "dune_api_key"),
             dune_query_id=integer("DUNE_QUERY_ID"),
         )
 
     def credential_status(self) -> dict[str, bool]:
         return {
-            "telegram": bool(self.telegram_api_id and self.telegram_api_hash),
-            "bot": bool(self.telegram_bot_token and self.telegram_chat_id),
             "dune": bool(self.dune_api_key and self.dune_query_id),
         }

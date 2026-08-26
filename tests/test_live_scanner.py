@@ -1,4 +1,6 @@
 from crypto_signal_terminal.main import _market, build_demo_state
+from crypto_signal_terminal.main import build_live_state
+from crypto_signal_terminal.domain.models import LifecycleState
 from crypto_signal_terminal.market.scanner import LiveMarketScanner
 
 
@@ -26,7 +28,6 @@ async def test_scanner_refreshes_native_and_smart_money_opportunities() -> None:
     assert state.mode == "live"
     assert {item.symbol for item in state.opportunities} == {"BTCUSDT", "SOLUSDT"}
     assert state.smart_money[0].symbol == "SOLUSDT"
-    assert all(item.signal.account_id != "demo" for item in state.confirmations)
 
 
 async def test_partial_watchlist_failure_is_visible_as_degraded() -> None:
@@ -73,5 +74,44 @@ async def test_total_market_failure_clears_stale_demo_opportunities() -> None:
     assert state.mode == "live"
     assert state.opportunities == []
     assert state.smart_money == []
-    assert all(item.signal.account_id != "demo" for item in state.confirmations)
     assert state.market_health == "degraded"
+
+
+async def test_healthy_market_without_trigger_remains_visible_as_forming_observation() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(
+                symbol, "67000", trend_4h=1, trend_1h=-1, setup_15m=0,
+                trigger_5m=0, aggressive_flow_imbalance="0.02",
+            )
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT",))
+
+    assert await scanner.scan_once() == 1
+    assert len(state.opportunities) == 1
+    observation = state.opportunities[0]
+    assert observation.id == "observe:BTCUSDT"
+    assert observation.state is LifecycleState.FORMING
+    assert observation.order_plan is None
+    assert observation.title == "实时市场观察 · 等待触发"
+    assert observation.risk == "当前不具备可执行条件，系统不会生成订单建议"
+
+
+async def test_scanner_refreshes_the_altcoin_universe_before_scanning() -> None:
+    class Universe:
+        async def top_altcoins(self): return ("SOLUSDT", "SUIUSDT")
+
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(symbol, "67000", trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1, aggressive_flow_imbalance="0.6")
+
+    scanner = LiveMarketScanner(state=build_live_state(), market=Market(), universe=Universe())
+    assert await scanner.scan_once() == 4
+    assert scanner.watchlist == ("BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT")
+
+
+def test_scanner_uses_fast_refresh_without_unbounded_parallelism() -> None:
+    scanner = LiveMarketScanner(state=build_live_state(), market=object(), watchlist=("BTCUSDT",))
+    assert scanner.interval_seconds == 5
+    assert scanner.max_concurrency == 6

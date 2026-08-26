@@ -34,10 +34,25 @@ export interface OrderPlan {
   estimated_fees: string;
 }
 
+export interface SignalAnalysis {
+  opportunity_score: number;
+  confidence: number;
+  p_tp_before_sl: string;
+  expected_value: string;
+  evidence_conflict: string;
+  is_tradeable: boolean;
+  market_regime: string;
+  signal_type: string;
+  smart_money_bias: string;
+  derivatives_bias: string;
+  order_flow_bias: string;
+  news_bias: string;
+}
+
 export interface Opportunity {
   id: string;
   symbol: string;
-  source: "NATIVE" | "TELEGRAM" | "SMART_MONEY" | "DEMO";
+  source: "NATIVE" | "SMART_MONEY" | "DEMO";
   state: LifecycleState;
   confidence: number;
   title: string | null;
@@ -46,6 +61,7 @@ export interface Opportunity {
   updated_at: string;
   evidence: Evidence[];
   order_plan: OrderPlan | null;
+  analysis?: SignalAnalysis | null;
 }
 
 export interface SmartMoneyCandidate {
@@ -58,21 +74,6 @@ export interface SmartMoneyCandidate {
   evidence: Evidence[];
   wallet?: string | null;
   chain?: string | null;
-}
-
-export interface Confirmation {
-  id: string;
-  verdict: "CONFIRMED" | "CONDITIONAL" | "REJECTED" | "EXPIRED" | "UNPARSEABLE";
-  confidence: number;
-  analyzed_at: string;
-  evidence: Evidence[];
-  reason_codes: string[];
-  order_plan: OrderPlan | null;
-  signal: {
-    symbol: string | null;
-    direction: Direction | null;
-    channel_id: number;
-  };
 }
 
 export interface Candle {
@@ -88,15 +89,12 @@ export interface Snapshot {
   mode: string;
   opportunities: Opportunity[];
   smart_money: SmartMoneyCandidate[];
-  confirmations: Confirmation[];
   candles?: Record<string, Candle[]>;
 }
 
 export interface Health {
   mode: string;
   market: string;
-  telegram: string;
-  bot: string;
   dune: string;
   market_detail: MarketHealthDetail;
 }

@@ -54,7 +54,17 @@ class BybitCompositeMarketClient:
         clock: Callable[[], datetime] = lambda: datetime.now(tz=UTC),
         include_peers: bool = True,
     ) -> None:
-        self.client = client
+        self._owns_client = client is None
+        self.client = client or httpx.AsyncClient(
+            base_url="https://api.bybit.com",
+            timeout=httpx.Timeout(4, connect=2),
+            limits=httpx.Limits(max_connections=24, max_keepalive_connections=12),
+        )
+        self._peer_client = httpx.AsyncClient(
+            base_url="https://www.okx.com",
+            timeout=httpx.Timeout(2, connect=1),
+            limits=httpx.Limits(max_connections=12, max_keepalive_connections=6),
+        )
         self.clock = clock
         self.include_peers = include_peers
 
@@ -68,8 +78,7 @@ class BybitCompositeMarketClient:
 
     async def snapshot(self, symbol: str) -> MarketSnapshot:
         normalized = symbol.upper().replace("/", "").replace("-", "")
-        owned = self.client is None
-        client = self.client or httpx.AsyncClient(base_url="https://api.bybit.com", timeout=7)
+        client = self.client
         started = self.clock()
         try:
             responses = await asyncio.gather(
@@ -77,7 +86,7 @@ class BybitCompositeMarketClient:
                 self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="240", limit=24),
                 self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="60", limit=24),
                 self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="15", limit=24),
-                self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="5", limit=60),
+                self._get(client, "/v5/market/kline", category="linear", symbol=normalized, interval="5", limit=300),
                 self._get(client, "/v5/market/orderbook", category="linear", symbol=normalized, limit=50),
                 self._get(client, "/v5/market/recent-trade", category="linear", symbol=normalized, limit=200),
                 self._get(client, "/v5/market/open-interest", category="linear", symbol=normalized, intervalTime="5min", limit=2),
@@ -121,24 +130,26 @@ class BybitCompositeMarketClient:
                 candles=candle_rows,
             )
         finally:
-            if owned:
-                await client.aclose()
+            pass
 
-    @staticmethod
-    async def _okx_price_confirms(symbol: str, reference: Decimal) -> int:
+    async def _okx_price_confirms(self, symbol: str, reference: Decimal) -> int:
         if not symbol.endswith("USDT") or reference <= 0:
             return 0
         instrument = f"{symbol[:-4]}-USDT-SWAP"
         try:
-            async with httpx.AsyncClient(base_url="https://www.okx.com", timeout=4) as client:
-                response = await client.get("/api/v5/market/ticker", params={"instId": instrument})
-                response.raise_for_status()
-                item = response.json()["data"][0]
-                peer_mid = (_d(item["bidPx"]) + _d(item["askPx"])) / 2
-                deviation = abs(peer_mid - reference) / reference
-                return 1 if deviation <= Decimal("0.0075") else 0
+            response = await self._peer_client.get("/api/v5/market/ticker", params={"instId": instrument})
+            response.raise_for_status()
+            item = response.json()["data"][0]
+            peer_mid = (_d(item["bidPx"]) + _d(item["askPx"])) / 2
+            deviation = abs(peer_mid - reference) / reference
+            return 1 if deviation <= Decimal("0.0075") else 0
         except Exception:
             return 0
+
+    async def close(self) -> None:
+        await self._peer_client.aclose()
+        if self._owns_client:
+            await self.client.aclose()
 
     @staticmethod
     def _features(candles_4h: list, candles_1h: list, candles_15m: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict]) -> dict[str, str | int]:

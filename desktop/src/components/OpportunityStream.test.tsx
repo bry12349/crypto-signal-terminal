@@ -22,10 +22,10 @@ const items: Opportunity[] = [
   {
     id: "entry",
     symbol: "SOLUSDT",
-    source: "TELEGRAM",
+    source: "NATIVE",
     state: "ENTRY_VALID",
     confidence: 84,
-    title: "Telegram 二次确认",
+    title: "原生趋势确认",
     risk: "BTC approaching support",
     source_label: "Alpha Channel",
     updated_at: "2026-08-01T08:00:01Z",
@@ -46,5 +46,10 @@ describe("OpportunityStream", () => {
   it("shows an explicit empty state", () => {
     render(<OpportunityStream items={[]} selectedId={null} onSelect={() => undefined} />);
     expect(screen.getByText("当前无可执行机会")).toBeVisible();
+  });
+
+  it("keeps state text in a semantic badge instead of the 6px status dot", () => {
+    render(<OpportunityStream items={items} selectedId={null} onSelect={() => undefined} />);
+    expect(screen.getAllByText("可入场")[0]).toHaveClass("state-label");
   });
 });

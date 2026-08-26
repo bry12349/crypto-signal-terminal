@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from crypto_signal_terminal.api import ApplicationState, create_app
 from crypto_signal_terminal.config import MemorySecretStore
-from crypto_signal_terminal.main import build_demo_state, build_live_state, parent_is_gone, parse_args, run_demo_replay
+from crypto_signal_terminal.main import build_demo_state, build_live_state, parent_is_gone, parse_args, run_demo_replay, secret_store_for_mode
 from crypto_signal_terminal.storage import AuditStore
 
 
@@ -15,9 +15,7 @@ def test_snapshot_exposes_all_signal_paths_without_secrets() -> None:
     serialized = json.dumps(body).lower()
     assert len(body["opportunities"]) >= 2
     assert len(body["smart_money"]) >= 1
-    assert len(body["confirmations"]) >= 1
-    assert "api_hash" not in serialized
-    assert "bot_token" not in serialized
+    assert "dune-secret" not in serialized
 
 
 def test_health_reports_demo_integrations_as_optional() -> None:
@@ -27,13 +25,12 @@ def test_health_reports_demo_integrations_as_optional() -> None:
     assert body["market"] == "healthy"
     assert body["market_detail"]["healthy_count"] == 2
     assert body["market_detail"]["expected_count"] == 2
-    assert body["telegram"] == "not_configured"
 
 
 def test_settings_status_only_returns_booleans() -> None:
-    state = ApplicationState(mode="demo", credentials={"telegram": True, "bot": False, "dune": False})
+    state = ApplicationState(mode="demo", credentials={"dune": False})
     body = TestClient(create_app(state)).get("/api/v1/settings/status").json()
-    assert body == {"telegram": True, "bot": False, "dune": False}
+    assert body == {"dune": False}
     assert all(isinstance(value, bool) for value in body.values())
 
 
@@ -99,19 +96,19 @@ def test_paper_order_is_persisted_and_available_from_history(tmp_path) -> None:
     assert AuditStore(tmp_path / "audit.sqlite3").paper_orders()[0]["id"] == prepared.json()["id"]
 
 
-def test_confirmed_telegram_signal_can_prepare_paper_order(tmp_path) -> None:
-    state = build_demo_state()
-    result = next(item for item in state.confirmations if item.order_plan is not None)
-    client = TestClient(create_app(
-        state,
-        audit_store=AuditStore(tmp_path / "audit.sqlite3"),
-        clock=lambda: result.analyzed_at,
-    ))
+def test_audit_store_removes_retired_message_tables(tmp_path) -> None:
+    path = tmp_path / "audit.sqlite3"
+    connection = __import__("sqlite3").connect(path)
+    connection.execute("CREATE TABLE telegram_message_versions (id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
 
-    response = client.post("/api/v1/paper-orders", json={"opportunity_id": result.id})
+    AuditStore(path).close()
 
-    assert response.status_code == 201
-    assert response.json()["symbol"] == result.signal.symbol
+    names = {row[0] for row in __import__("sqlite3").connect(path).execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "telegram_message_versions" not in names
+    assert "paper_orders" in names
+
 
 
 def test_unknown_paper_order_is_not_found() -> None:
@@ -155,22 +152,20 @@ def test_credential_endpoint_returns_status_not_secret() -> None:
     client = TestClient(create_app(state, secret_store=store))
     body = client.post(
         "/api/v1/settings/credentials",
-        json={"telegram_api_id": 123, "telegram_api_hash": "hash-secret", "telegram_bot_token": "bot-secret", "telegram_chat_id": "456"},
+        json={"dune_api_key": "dune-secret", "dune_query_id": 456},
     ).json()
-    assert body == {"telegram": True, "bot": True, "dune": False}
+    assert body == {"dune": True}
     assert "secret" not in json.dumps(body)
-    assert store.get("telegram_api_hash") == "hash-secret"
+    assert store.get("dune_api_key") == "dune-secret"
 
 
 def test_sidecar_port_argument_is_supported() -> None:
     assert parse_args(["--port", "9876"]).port == 9876
 
 
-def test_telegram_qr_login_requires_saved_credentials() -> None:
-    client = TestClient(create_app(ApplicationState(), secret_store=MemorySecretStore()))
-    response = client.post("/api/v1/telegram/login/qr")
-    assert response.status_code == 409
-    assert response.json()["detail"] == "telegram_credentials_missing"
+def test_demo_sidecar_does_not_touch_the_system_keyring() -> None:
+    assert isinstance(secret_store_for_mode("demo"), MemorySecretStore)
+
 
 
 def test_sidecar_detects_reparenting_after_desktop_exit() -> None:
@@ -182,5 +177,4 @@ def test_live_startup_never_contains_demo_trades() -> None:
     state = build_live_state()
     assert state.mode == "live"
     assert state.opportunities == []
-    assert state.confirmations == []
     assert state.market_health == "connecting"

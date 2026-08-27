@@ -9,6 +9,7 @@ from decimal import Decimal
 import uvicorn
 
 from crypto_signal_terminal.api import ApplicationState, create_app
+from crypto_signal_terminal.adapters.exchanges import BitcoinHeightClient
 from crypto_signal_terminal.config import KeyringSecretStore, MemorySecretStore, SecretStore, Settings
 from crypto_signal_terminal.domain.models import DataHealth, MarketSnapshot
 from crypto_signal_terminal.engines.altcoin import AltcoinEngine
@@ -117,6 +118,7 @@ def run() -> None:
 
     live_market = BybitCompositeMarketClient()
     state.market_provider = live_market
+    state.cycle_height_provider = BitcoinHeightClient()
     hot_universe = MajorExchangeHotUniverse()
     scanner = LiveMarketScanner(state=state, market=live_market, universe=hot_universe)
 

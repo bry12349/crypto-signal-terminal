@@ -32,6 +32,29 @@ def test_candle_endpoint_requests_the_selected_exchange_interval() -> None:
     assert response.json()[0]["timestamp"] == 1_700_000_000
 
 
+def test_cycle_endpoint_returns_a_conclusion_from_live_block_height() -> None:
+    class Height:
+        async def tip_height(self) -> int:
+            return 840_000
+
+    state = build_live_state()
+    state.cycle_height_provider = Height()
+    response = TestClient(create_app(state)).get("/api/v1/cycle/btc")
+    assert response.status_code == 200
+    assert response.json()["height"] == 840_000
+    assert response.json()["phase"] == "BULL_MID"
+
+
+def test_cycle_endpoint_does_not_fabricate_a_height_when_source_fails() -> None:
+    class Height:
+        async def tip_height(self) -> int:
+            raise TimeoutError("unavailable")
+
+    state = build_live_state()
+    state.cycle_height_provider = Height()
+    assert TestClient(create_app(state)).get("/api/v1/cycle/btc").status_code == 503
+
+
 def test_health_reports_demo_integrations_as_optional() -> None:
     app = create_app(build_demo_state())
     body = TestClient(app).get("/api/v1/health").json()

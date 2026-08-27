@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Radar } from "lucide-react";
+import { CyclePanel } from "./components/CyclePanel";
+import { AppearanceControls } from "./components/AppearanceControls";
 
 import { OpportunityStream } from "./components/OpportunityStream";
 import { OrderTicket } from "./components/OrderTicket";
@@ -8,7 +10,7 @@ import { StatusStrip } from "./components/StatusStrip";
 import { useTerminalStore } from "./store";
 
 export default function App() {
-  const { snapshot, opportunities, health, connected, selectedId, select, load, connectEvents } = useTerminalStore();
+  const { snapshot, opportunities, health, connected, cycle, selectedId, select, load, connectEvents } = useTerminalStore();
   const selected = useMemo(() => opportunities.find((item) => item.id === selectedId) ?? null, [opportunities, selectedId]);
 
   useEffect(() => {
@@ -32,6 +34,7 @@ export default function App() {
   return (
     <div className="terminal">
       <StatusStrip health={health} connected={connected} items={opportunities} />
+      <div className="cycle-dock"><CyclePanel cycle={cycle} /><AppearanceControls /></div>
       <nav className="icon-nav">
         <div className="nav-logo">C</div>
         <button className="active" aria-label="雷达"><Radar /></button>

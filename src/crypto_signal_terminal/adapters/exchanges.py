@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import AsyncIterator, Protocol, Sequence
 
 import websockets
+import httpx
 
 from crypto_signal_terminal.market.state import MarketEvent
 
@@ -97,3 +98,20 @@ class PublicWebSocketAdapter:
                 received_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
                 for event in self.decoder(json.loads(raw), received_ms=received_ms):
                     yield event
+
+
+class BitcoinHeightClient:
+    """Public Bitcoin tip-height source with a short, bounded request."""
+
+    async def tip_height(self) -> int:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5, connect=2)) as client:
+            for url in ("https://mempool.space/api/blocks/tip/height", "https://blockstream.info/api/blocks/tip/height", "https://blockchain.info/q/getblockcount"):
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                    height = int(response.text)
+                    if height > 0:
+                        return height
+                except (httpx.HTTPError, ValueError):
+                    continue
+        raise RuntimeError("all BTC tip-height sources are unavailable")

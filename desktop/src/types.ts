@@ -99,6 +99,14 @@ export interface Health {
   market_detail: MarketHealthDetail;
 }
 
+export interface BtcCycle {
+  height: number;
+  index: string;
+  phase: string;
+  market_bias: string;
+  blocks_to_halving: number;
+}
+
 export interface MarketSymbolHealth {
   symbol: string;
   status: "healthy" | "degraded" | "unavailable" | "unknown";

@@ -6,8 +6,7 @@ import { formatBeijingDateTime, formatBeijingTime, type ChartBar } from "../char
 import type { Candle, MarketSymbolHealth, Opportunity } from "../types";
 
 // Bitget's documented default follows the international convention: green up, red down.
-const BITGET_UP = "#0ecb81";
-const BITGET_DOWN = "#f6465d";
+const candleColors = () => ({ up: getComputedStyle(document.documentElement).getPropertyValue("--candle-up").trim() || "#2f8cff", down: getComputedStyle(document.documentElement).getPropertyValue("--candle-down").trim() || "#f6465d" });
 const TIMEFRAMES = [{ label: "5m", interval: "5" }, { label: "15m", interval: "15" }, { label: "1h", interval: "60" }, { label: "4h", interval: "240" }] as const;
 type Timeframe = typeof TIMEFRAMES[number]["label"];
 type PrimaryIndicator = "NONE" | "MA" | "EMA" | "BOLL";
@@ -78,7 +77,8 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
       timeScale: { timeVisible: true, secondsVisible: false, tickMarkFormatter: (time: Time) => formatBeijingTime(typeof time === "number" ? time : 0) },
       handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }, handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
     });
-    const candleSeries = instance.addSeries(CandlestickSeries, { upColor: BITGET_UP, downColor: BITGET_DOWN, wickUpColor: BITGET_UP, wickDownColor: BITGET_DOWN, borderVisible: false });
+    const colors = candleColors();
+    const candleSeries = instance.addSeries(CandlestickSeries, { upColor: colors.up, downColor: colors.down, wickUpColor: colors.up, wickDownColor: colors.down, borderVisible: false });
     const subPane = instance.addPane(true);
     subPane.setHeight(108);
     const volumeSeries = instance.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1);
@@ -106,7 +106,7 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
       ? chart.current.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1)
       : chart.current.addSeries(LineSeries, { color: secondary === "RSI" ? "#d7a84e" : "#b58cff", lineWidth: 1, lastValueVisible: true, priceLineVisible: false }, 1);
     volume.current = series as ISeriesApi<"Histogram">;
-    if (secondary === "VOLUME") (series as ISeriesApi<"Histogram">).setData(data.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: bar.close >= bar.open ? "rgba(14, 203, 129, .50)" : "rgba(246, 70, 93, .50)" })));
+    if (secondary === "VOLUME") { const colors = candleColors(); (series as ISeriesApi<"Histogram">).setData(data.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: bar.close >= bar.open ? `${colors.up}80` : `${colors.down}80` }))); }
     else if (secondary === "RSI") (series as ISeriesApi<"Line">).setData(rsiData(data));
     else (series as ISeriesApi<"Line">).setData(macdData(data));
     return () => { if (chart.current) chart.current.removeSeries(series); if (volume.current === series) volume.current = null; };
@@ -128,8 +128,9 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
   useEffect(() => {
     if (!candle.current || !selected.order_plan) return;
     const series = candle.current;
-    const stop = series.createPriceLine({ price: +selected.order_plan.stop, color: BITGET_DOWN, lineWidth: 1, lineStyle: 2, title: "SL" });
-    const targets = selected.order_plan.targets.map((target, index) => series.createPriceLine({ price: +target, color: BITGET_UP, lineWidth: 1, lineStyle: 2, title: `TP${index + 1}` }));
+    const colors = candleColors();
+    const stop = series.createPriceLine({ price: +selected.order_plan.stop, color: colors.down, lineWidth: 1, lineStyle: 2, title: "SL" });
+    const targets = selected.order_plan.targets.map((target, index) => series.createPriceLine({ price: +target, color: colors.up, lineWidth: 1, lineStyle: 2, title: `TP${index + 1}` }));
     return () => { series.removePriceLine(stop); targets.forEach((line) => series.removePriceLine(line)); };
   }, [selected]);
 
@@ -148,6 +149,8 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
   const [secondary, setSecondary] = useState<SecondaryIndicator>("VOLUME");
   const [periodCandles, setPeriodCandles] = useState<Candle[] | null>(null);
   const [periodLoading, setPeriodLoading] = useState(false);
+  const [appearanceVersion, setAppearanceVersion] = useState(0);
+  useEffect(() => { const refresh = () => setAppearanceVersion((value) => value + 1); window.addEventListener("appearance-change", refresh); return () => window.removeEventListener("appearance-change", refresh); }, []);
   useEffect(() => {
     if (!selected || mode !== "live") return;
     const abort = new AbortController();
@@ -167,6 +170,6 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
   const healthLabel = health?.status === "healthy" ? `${base} 行情健康` : health?.status === "degraded" ? `${base} 行情降级` : health?.status === "unavailable" ? `${base} 行情不可用` : `${base} 行情待确认`;
   return <main className="signal-canvas"><div className="instrument-head"><div><span className="eyebrow">SELECTED INSTRUMENT · UTC+8</span><h1>{base}<small> / USDT PERP</small></h1></div><div className={`direction-lock ${direction?.toLowerCase() ?? "watch"}`}><span>{direction ?? "NO TRADE"}</span><strong>{selected.confidence}</strong><small>{selected.state === "FORMING" ? "观察强度" : "结构可信度"}</small></div></div>
     <div className="setup-ribbon"><span><Layers3 size={14} />{selected.title}</span><span><Clock3 size={14} />{selected.state === "ENTRY_VALID" ? "有效窗口开启" : "等待触发"}</span><span className={`data-fresh ${health?.status === "healthy" ? "" : "unhealthy"}`}>{health?.status === "healthy" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{healthLabel}</span></div>
-    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button type="button" key={item.label} aria-pressed={timeframe === item.label} className={timeframe === item.label ? "active" : ""} onPointerDown={(event) => event.stopPropagation()} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option></select></label></div>{mode === "live" && (periodCandles ?? candles).length ? <MiniChart selected={selected} candles={periodCandles ?? candles} timeframe={timeframe} primary={primary} secondary={secondary} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>{periodLoading && candles.length ? `正在加载 ${timeframe} 实时 K 线` : "暂无可验证的实时 K 线"}</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && (periodCandles ?? candles).length ? `${timeframe} · PUBLIC FUTURES · UTC+8` : "NO MARKET DATA"}</div></div>
+    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button type="button" key={item.label} aria-pressed={timeframe === item.label} className={timeframe === item.label ? "active" : ""} onPointerDown={(event) => event.stopPropagation()} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option></select></label></div>{mode === "live" && (periodCandles ?? candles).length ? <MiniChart key={appearanceVersion} selected={selected} candles={periodCandles ?? candles} timeframe={timeframe} primary={primary} secondary={secondary} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>{periodLoading && candles.length ? `正在加载 ${timeframe} 实时 K 线` : "暂无可验证的实时 K 线"}</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && (periodCandles ?? candles).length ? `${timeframe} · PUBLIC FUTURES · UTC+8` : "NO MARKET DATA"}</div></div>
     <section className="evidence-panel"><AnalysisStrip selected={selected} /><div className="section-title"><div><span className="eyebrow">WHY NOW</span><h3>核心证据</h3></div></div><div className="evidence-grid">{selected.evidence.slice(0, 3).map((item, index) => <article key={item.code}><span>0{index + 1}</span><div><strong>{item.text}</strong><small>{item.value ? `实时值 ${item.value}` : "多源数据已确认"}</small></div><CheckCircle2 size={17} /></article>)}</div>{selected.risk && <div className="risk-line"><AlertTriangle size={15} /><strong>主要风险</strong><span>{selected.risk}</span></div>}</section></main>;
 }

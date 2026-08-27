@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from crypto_signal_terminal.config import KeyringSecretStore, SecretStore
+from crypto_signal_terminal.cycle import cycle_state_at
 from crypto_signal_terminal.domain.models import Opportunity, SmartMoneyCandidate
 from crypto_signal_terminal.market.health import MarketHealthRegistry
 from crypto_signal_terminal.storage import AuditStore
@@ -28,6 +29,7 @@ class ApplicationState:
     paper_orders: list[dict] = field(default_factory=list)
     market_candles: dict[str, list[dict]] = field(default_factory=dict)
     market_provider: Any | None = None
+    cycle_height_provider: Any | None = None
     dune_health: str = "not_configured"
     subscribers: set[asyncio.Queue] = field(default_factory=set)
 
@@ -78,7 +80,7 @@ def create_app(
             if task:
                 await task
 
-    app = FastAPI(title="Crypto Signal Terminal", version="0.5.2", lifespan=lifespan)
+    app = FastAPI(title="Crypto Signal Terminal", version="0.6.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:1420", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost"],
@@ -112,6 +114,16 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Live candle source is unavailable") from exc
         return [item.model_dump(mode="json") for item in values]
+
+    @app.get("/api/v1/cycle/btc")
+    async def btc_cycle() -> dict:
+        if runtime.cycle_height_provider is None:
+            raise HTTPException(status_code=503, detail="BTC block-height source is unavailable")
+        try:
+            state = cycle_state_at(await runtime.cycle_height_provider.tip_height())
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="BTC block-height source is unavailable") from exc
+        return {"height": state.height, "index": str(state.index), "phase": state.phase, "market_bias": state.market_bias, "blocks_to_halving": state.blocks_to_halving}
 
     @app.get("/api/v1/settings/status")
     async def settings_status() -> dict[str, bool]:

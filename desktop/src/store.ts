@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { Health, Opportunity, Snapshot } from "./types";
+import type { BtcCycle, Health, Opportunity, Snapshot } from "./types";
 
 const API = "http://127.0.0.1:8765";
 
@@ -27,6 +27,7 @@ interface TerminalStore {
   health: Health;
   selectedId: string | null;
   connected: boolean;
+  cycle: BtcCycle | null;
   load: () => Promise<void>;
   connectEvents: () => () => void;
   select: (id: string) => void;
@@ -41,6 +42,7 @@ export const useTerminalStore = create<TerminalStore>((set) => ({
   },
   selectedId: null,
   connected: false,
+  cycle: null,
   select: (id) => set({ selectedId: id }),
   connectEvents: () => {
     let socket: WebSocket | null = null;
@@ -80,16 +82,18 @@ export const useTerminalStore = create<TerminalStore>((set) => ({
   },
   load: async () => {
     try {
-      const [snapshotResponse, healthResponse] = await Promise.all([fetch(`${API}/api/v1/snapshot`), fetch(`${API}/api/v1/health`)]);
+      const [snapshotResponse, healthResponse, cycleResponse] = await Promise.all([fetch(`${API}/api/v1/snapshot`), fetch(`${API}/api/v1/health`), fetch(`${API}/api/v1/cycle/btc`)]);
       if (!snapshotResponse.ok || !healthResponse.ok) throw new Error("local service unavailable");
       const snapshot = (await snapshotResponse.json()) as Snapshot;
       const health = (await healthResponse.json()) as Health;
+      const cycle = cycleResponse.ok ? await cycleResponse.json() as BtcCycle : null;
       const opportunities = mergeSignalPaths(snapshot);
       set((state) => ({
         snapshot,
         opportunities,
         health,
         connected: true,
+        cycle,
         selectedId: opportunities.some((item) => item.id === state.selectedId) ? state.selectedId : opportunities[0]?.id ?? null,
       }));
     } catch {

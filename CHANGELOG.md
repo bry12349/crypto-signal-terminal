@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0 - 2026-08-27
+- Added a one-click BTC block-height cycle panel with an independently implemented WWI phase conclusion.
+- Added public BTC tip-height failover across mempool.space, Blockstream and Blockchain.com.
+- Added persisted application theme and K-line color presets, including Bitget blue-up/red-down.
+
 ## 0.5.2 - 2026-08-27
 - Fixed period switching to replace the complete asynchronous K-line series instead of only updating its final candle.
 - Made chart controls explicitly intercept pointer events above the chart canvas; primary and secondary indicators now recreate reliably.

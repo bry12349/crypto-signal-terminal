@@ -116,6 +116,7 @@ def run() -> None:
     state.paper_orders = list(reversed(store.paper_orders(limit=200)))
 
     live_market = BybitCompositeMarketClient()
+    state.market_provider = live_market
     hot_universe = MajorExchangeHotUniverse()
     scanner = LiveMarketScanner(state=state, market=live_market, universe=hot_universe)
 

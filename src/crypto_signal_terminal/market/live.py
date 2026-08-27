@@ -132,6 +132,19 @@ class BybitCompositeMarketClient:
         finally:
             pass
 
+    async def candles(self, symbol: str, interval: str, limit: int = 300) -> tuple[Candle, ...]:
+        normalized = symbol.upper().replace("/", "").replace("-", "")
+        if interval not in {"5", "15", "60", "240"}:
+            raise ValueError("unsupported candle interval")
+        result, _ = await self._get(
+            self.client, "/v5/market/kline", category="linear", symbol=normalized,
+            interval=interval, limit=max(50, min(limit, 500)),
+        )
+        return tuple(
+            Candle(timestamp=int(row[0]) // 1000, open=_d(row[1]), high=_d(row[2]), low=_d(row[3]), close=_d(row[4]), volume=_d(row[5]))
+            for row in reversed(result["list"])
+        )
+
     async def _okx_price_confirms(self, symbol: str, reference: Decimal) -> int:
         if not symbol.endswith("USDT") or reference <= 0:
             return 0

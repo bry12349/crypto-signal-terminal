@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -27,6 +27,7 @@ class ApplicationState:
     market_health_registry: MarketHealthRegistry = field(default_factory=MarketHealthRegistry)
     paper_orders: list[dict] = field(default_factory=list)
     market_candles: dict[str, list[dict]] = field(default_factory=dict)
+    market_provider: Any | None = None
     dune_health: str = "not_configured"
     subscribers: set[asyncio.Queue] = field(default_factory=set)
 
@@ -77,7 +78,7 @@ def create_app(
             if task:
                 await task
 
-    app = FastAPI(title="Crypto Signal Terminal", version="0.4.0", lifespan=lifespan)
+    app = FastAPI(title="Crypto Signal Terminal", version="0.5.1", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:1420", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost"],
@@ -99,6 +100,18 @@ def create_app(
             "market_detail": market,
             "dune": runtime.dune_health if runtime.credentials.get("dune") else "not_configured",
         }
+
+    @app.get("/api/v1/markets/{symbol}/candles")
+    async def candles(symbol: str, interval: str = "5", limit: int = 300) -> list[dict]:
+        if interval not in {"5", "15", "60", "240"}:
+            raise HTTPException(status_code=422, detail="Unsupported candle interval")
+        if runtime.market_provider is None:
+            raise HTTPException(status_code=503, detail="Live candle source is unavailable")
+        try:
+            values = await runtime.market_provider.candles(symbol.upper(), interval, max(50, min(limit, 500)))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Live candle source is unavailable") from exc
+        return [item.model_dump(mode="json") for item in values]
 
     @app.get("/api/v1/settings/status")
     async def settings_status() -> dict[str, bool]:

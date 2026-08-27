@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { demoSnapshot } from "../demo";
@@ -46,5 +46,12 @@ describe("SignalCanvas", () => {
     expect(screen.getAllByRole("button", { name: "5m" }).at(-1)).toBeVisible();
     expect(screen.getAllByLabelText("主图指标").at(-1)).toBeVisible();
     expect(screen.getAllByLabelText("副图指标").at(-1)).toBeVisible();
+  });
+
+  it("marks the clicked chart timeframe as selected", () => {
+    render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[]} health={undefined} />);
+    const hour = screen.getAllByRole("button", { name: "1h" }).at(-1)!;
+    fireEvent.click(hour);
+    expect(hour).toHaveAttribute("aria-pressed", "true");
   });
 });

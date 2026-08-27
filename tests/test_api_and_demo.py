@@ -7,6 +7,7 @@ from crypto_signal_terminal.api import ApplicationState, create_app
 from crypto_signal_terminal.config import MemorySecretStore
 from crypto_signal_terminal.main import build_demo_state, build_live_state, parent_is_gone, parse_args, run_demo_replay, secret_store_for_mode
 from crypto_signal_terminal.storage import AuditStore
+from crypto_signal_terminal.domain.models import Candle
 
 
 def test_snapshot_exposes_all_signal_paths_without_secrets() -> None:
@@ -16,6 +17,19 @@ def test_snapshot_exposes_all_signal_paths_without_secrets() -> None:
     assert len(body["opportunities"]) >= 2
     assert len(body["smart_money"]) >= 1
     assert "dune-secret" not in serialized
+
+
+def test_candle_endpoint_requests_the_selected_exchange_interval() -> None:
+    class Market:
+        async def candles(self, symbol: str, interval: str, limit: int):
+            assert (symbol, interval, limit) == ("BTCUSDT", "60", 300)
+            return (Candle(timestamp=1_700_000_000, open="100", high="101", low="99", close="100.5", volume="42"),)
+
+    state = build_live_state()
+    state.market_provider = Market()
+    response = TestClient(create_app(state)).get("/api/v1/markets/BTCUSDT/candles", params={"interval": "60"})
+    assert response.status_code == 200
+    assert response.json()[0]["timestamp"] == 1_700_000_000
 
 
 def test_health_reports_demo_integrations_as_optional() -> None:

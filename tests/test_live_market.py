@@ -83,3 +83,29 @@ async def test_candles_falls_back_to_binance_when_bybit_kline_is_unavailable() -
         candles = await client.candles("BTCUSDT", "60", limit=300)
     assert [candle.close for candle in candles] == [Decimal("101"), Decimal("102")]
     assert candles[-1].timestamp - candles[0].timestamp == 3600
+
+
+@pytest.mark.asyncio
+async def test_snapshot_falls_back_to_binance_when_bybit_composite_times_out() -> None:
+    def unavailable(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    def binance(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("ticker/24hr"):
+            return httpx.Response(200, json={"lastPrice": "100", "bidPrice": "99.9", "askPrice": "100.1", "openInterest": "1100", "lastFundingRate": "0.0001", "quoteVolume": "50000000"}, request=request)
+        if path.endswith("klines"):
+            rows = [[str(1_700_000_000_000 + index * 300_000), "99", "101", "98", "100", "42"] for index in range(24)]
+            return httpx.Response(200, json=rows, request=request)
+        if path.endswith("depth"):
+            return httpx.Response(200, json={"bids": [["99.95", "80"]], "asks": [["100.04", "20"]]}, request=request)
+        if path.endswith("aggTrades"):
+            return httpx.Response(200, json=[{"m": False, "q": "2000", "p": "100"}] * 10, request=request)
+        if path.endswith("openInterest"):
+            return httpx.Response(200, json={"openInterest": "1100"}, request=request)
+        raise AssertionError(path)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(unavailable), base_url="https://api.bybit.com") as bybit, httpx.AsyncClient(transport=httpx.MockTransport(binance), base_url="https://fapi.binance.com") as futures:
+        snapshot = await BybitCompositeMarketClient(client=bybit, binance_client=futures, include_peers=False).snapshot("BTCUSDT")
+    assert snapshot.exchange == "binance-public-composite"
+    assert snapshot.price == Decimal("100")

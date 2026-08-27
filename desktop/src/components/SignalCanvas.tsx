@@ -65,10 +65,12 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
   const candle = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volume = useRef<ISeriesApi<"Histogram"> | null>(null);
   const viewKey = useRef<string | null>(null);
+  const chartDestroyed = useRef(false);
   const data = useMemo(() => toBars(candles), [candles]);
 
   useEffect(() => {
     if (!host.current) return;
+    chartDestroyed.current = false;
     const instance = createChart(host.current, {
       width: host.current.clientWidth, height: host.current.clientHeight,
       layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: "#718096", fontFamily: "IBM Plex Mono, monospace" },
@@ -84,7 +86,14 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
     const volumeSeries = instance.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1);
     chart.current = instance; candle.current = candleSeries; volume.current = volumeSeries;
     const resize = new ResizeObserver(([entry]) => instance.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height }));
-    resize.observe(host.current); return () => { resize.disconnect(); instance.remove(); };
+    resize.observe(host.current); return () => {
+      // React StrictMode tears down the chart effect before indicator effects.
+      // Make their later cleanup a no-op instead of passing stale series back to
+      // lightweight-charts, which throws "Value is undefined".
+      chartDestroyed.current = true;
+      chart.current = null; candle.current = null; volume.current = null;
+      resize.disconnect(); instance.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -109,7 +118,7 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
     if (secondary === "VOLUME") { const colors = candleColors(); (series as ISeriesApi<"Histogram">).setData(data.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: bar.close >= bar.open ? `${colors.up}80` : `${colors.down}80` }))); }
     else if (secondary === "RSI") (series as ISeriesApi<"Line">).setData(rsiData(data));
     else (series as ISeriesApi<"Line">).setData(macdData(data));
-    return () => { if (chart.current) chart.current.removeSeries(series); if (volume.current === series) volume.current = null; };
+    return () => { if (!chartDestroyed.current && chart.current) chart.current.removeSeries(series); if (volume.current === series) volume.current = null; };
   }, [data, secondary]);
 
   useEffect(() => {
@@ -118,11 +127,11 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
     if (primary === "BOLL") {
       const lines = ["#9b8cff", "#d7a84e", "#9b8cff"].map((color) => chart.current!.addSeries(LineSeries, { ...settings, color }));
       bollingerBands(data).forEach((band, index) => lines[index].setData(band));
-      return () => lines.forEach((line) => chart.current?.removeSeries(line));
+      return () => { if (!chartDestroyed.current) lines.forEach((line) => chart.current?.removeSeries(line)); };
     }
     const line = chart.current.addSeries(LineSeries, { ...settings, color: primary === "EMA" ? "#f7b955" : "#38bdf8" });
     line.setData(movingAverage(data, primary === "EMA" ? 12 : 20, primary === "EMA"));
-    return () => chart.current?.removeSeries(line);
+    return () => { if (!chartDestroyed.current) chart.current?.removeSeries(line); };
   }, [data, primary]);
 
   useEffect(() => {
@@ -131,7 +140,7 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
     const colors = candleColors();
     const stop = series.createPriceLine({ price: +selected.order_plan.stop, color: colors.down, lineWidth: 1, lineStyle: 2, title: "SL" });
     const targets = selected.order_plan.targets.map((target, index) => series.createPriceLine({ price: +target, color: colors.up, lineWidth: 1, lineStyle: 2, title: `TP${index + 1}` }));
-    return () => { series.removePriceLine(stop); targets.forEach((line) => series.removePriceLine(line)); };
+    return () => { if (!chartDestroyed.current) { series.removePriceLine(stop); targets.forEach((line) => series.removePriceLine(line)); } };
   }, [selected]);
 
   return <div className="chart" ref={host} aria-label={`北京时间 ${timeframe} K 线图`} />;

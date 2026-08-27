@@ -1,11 +1,37 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { StrictMode } from "react";
+import { describe, expect, it, vi } from "vitest";
+
+const chartMock = vi.hoisted(() => ({ removed: false }));
+
+vi.mock("lightweight-charts", () => ({
+  CandlestickSeries: {}, HistogramSeries: {}, LineSeries: {}, ColorType: { Solid: "solid" },
+  createChart: () => {
+    chartMock.removed = false;
+    const series = () => ({ setData: vi.fn(), createPriceLine: vi.fn(() => ({})), removePriceLine: vi.fn() });
+    return {
+      addSeries: series, addPane: () => ({ setHeight: vi.fn() }), applyOptions: vi.fn(),
+      timeScale: () => ({ fitContent: vi.fn(), scrollToRealTime: vi.fn() }),
+      removeSeries: vi.fn(() => { if (chartMock.removed) throw new Error("Value is undefined"); }),
+      remove: vi.fn(() => { chartMock.removed = true; }),
+    };
+  },
+}));
 
 import { demoSnapshot } from "../demo";
 import { SignalCanvas } from "./SignalCanvas";
 
 
 describe("SignalCanvas", () => {
+  it("does not remove indicator series from an already destroyed chart", () => {
+    chartMock.removed = false;
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    const candles = Array.from({ length: 24 }, (_, index) => ({ timestamp: 1_787_830_000 + index * 300, open: "100", high: "102", low: "99", close: "101", volume: "12" }));
+    const view = render(<StrictMode><SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={candles} health={undefined} /></StrictMode>);
+    expect(() => view.unmount()).not.toThrow();
+  });
+
   it("never substitutes fabricated candles when live data is unavailable", () => {
     render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[]} health={undefined} />);
     expect(screen.getByText("暂无可验证的实时 K 线")).toBeVisible();

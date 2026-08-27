@@ -54,4 +54,14 @@ describe("SignalCanvas", () => {
     fireEvent.click(hour);
     expect(hour).toHaveAttribute("aria-pressed", "true");
   });
+
+  it("applies primary and secondary indicator selections instead of leaving decorative controls", () => {
+    render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[]} health={undefined} />);
+    const primary = screen.getAllByLabelText("主图指标").at(-1)!;
+    const secondary = screen.getAllByLabelText("副图指标").at(-1)!;
+    fireEvent.change(primary, { target: { value: "BOLL" } });
+    fireEvent.change(secondary, { target: { value: "MACD" } });
+    expect(primary).toHaveValue("BOLL");
+    expect(secondary).toHaveValue("MACD");
+  });
 });

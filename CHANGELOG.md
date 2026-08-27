@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2 - 2026-08-27
+- Fixed period switching to replace the complete asynchronous K-line series instead of only updating its final candle.
+- Made chart controls explicitly intercept pointer events above the chart canvas; primary and secondary indicators now recreate reliably.
+- Added Binance USD-M public K-line failover when Bybit public market data is unavailable.
+
 ## 0.5.1 - 2026-08-27
 
 - 多周期切换改为后端请求 Bybit 原始 5m、15m、1h、4h K 线；不再将 5m 数据前端分组合成其他周期。

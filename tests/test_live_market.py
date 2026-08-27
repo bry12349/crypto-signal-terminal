@@ -63,3 +63,23 @@ async def test_exchange_timestamp_marks_old_market_data_unhealthy() -> None:
         ).snapshot("SOLUSDT")
     assert snapshot.data_health.healthy is False
     assert snapshot.data_health.stale_sources == ("bybit_ticker",)
+
+
+@pytest.mark.asyncio
+async def test_candles_falls_back_to_binance_when_bybit_kline_is_unavailable() -> None:
+    def bybit_unavailable(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, request=request)
+
+    def binance_kline(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/fapi/v1/klines"
+        assert request.url.params["interval"] == "1h"
+        return httpx.Response(200, json=[
+            ["1700000000000", "100", "102", "99", "101", "42"],
+            ["1700003600000", "101", "103", "100", "102", "51"],
+        ], request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(bybit_unavailable), base_url="https://api.bybit.com") as bybit, httpx.AsyncClient(transport=httpx.MockTransport(binance_kline), base_url="https://fapi.binance.com") as binance:
+        client = BybitCompositeMarketClient(client=bybit, binance_client=binance, include_peers=False)
+        candles = await client.candles("BTCUSDT", "60", limit=300)
+    assert [candle.close for candle in candles] == [Decimal("101"), Decimal("102")]
+    assert candles[-1].timestamp - candles[0].timestamp == 3600

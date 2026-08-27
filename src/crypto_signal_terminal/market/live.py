@@ -51,6 +51,7 @@ class BybitCompositeMarketClient:
         self,
         *,
         client: httpx.AsyncClient | None = None,
+        binance_client: httpx.AsyncClient | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(tz=UTC),
         include_peers: bool = True,
     ) -> None:
@@ -59,6 +60,12 @@ class BybitCompositeMarketClient:
             base_url="https://api.bybit.com",
             timeout=httpx.Timeout(4, connect=2),
             limits=httpx.Limits(max_connections=24, max_keepalive_connections=12),
+        )
+        self._owns_binance_client = binance_client is None
+        self._binance_client = binance_client or httpx.AsyncClient(
+            base_url="https://fapi.binance.com",
+            timeout=httpx.Timeout(4, connect=2),
+            limits=httpx.Limits(max_connections=12, max_keepalive_connections=6),
         )
         self._peer_client = httpx.AsyncClient(
             base_url="https://www.okx.com",
@@ -136,13 +143,25 @@ class BybitCompositeMarketClient:
         normalized = symbol.upper().replace("/", "").replace("-", "")
         if interval not in {"5", "15", "60", "240"}:
             raise ValueError("unsupported candle interval")
-        result, _ = await self._get(
-            self.client, "/v5/market/kline", category="linear", symbol=normalized,
-            interval=interval, limit=max(50, min(limit, 500)),
-        )
+        safe_limit = max(50, min(limit, 500))
+        try:
+            result, _ = await self._get(
+                self.client, "/v5/market/kline", category="linear", symbol=normalized,
+                interval=interval, limit=safe_limit,
+            )
+            rows = reversed(result["list"])
+        except Exception:
+            # The desktop chart must remain usable when a regional Bybit edge is
+            # unavailable. Binance USD-M provides the same public perpetual OHLCV.
+            binance_interval = {"5": "5m", "15": "15m", "60": "1h", "240": "4h"}[interval]
+            response = await self._binance_client.get(
+                "/fapi/v1/klines", params={"symbol": normalized, "interval": binance_interval, "limit": safe_limit},
+            )
+            response.raise_for_status()
+            rows = response.json()
         return tuple(
             Candle(timestamp=int(row[0]) // 1000, open=_d(row[1]), high=_d(row[2]), low=_d(row[3]), close=_d(row[4]), volume=_d(row[5]))
-            for row in reversed(result["list"])
+            for row in rows
         )
 
     async def _okx_price_confirms(self, symbol: str, reference: Decimal) -> int:
@@ -163,6 +182,8 @@ class BybitCompositeMarketClient:
         await self._peer_client.aclose()
         if self._owns_client:
             await self.client.aclose()
+        if self._owns_binance_client:
+            await self._binance_client.aclose()
 
     @staticmethod
     def _features(candles_4h: list, candles_1h: list, candles_15m: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict]) -> dict[str, str | int]:

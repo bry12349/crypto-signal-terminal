@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CandlestickSeries, ColorType, createChart, HistogramSeries, LineSeries, type IChartApi, type ISeriesApi, type Time, type UTCTimestamp } from "lightweight-charts";
 import { AlertTriangle, CheckCircle2, Clock3, Crosshair, Layers3 } from "lucide-react";
 
-import { createIncrementalSeriesUpdater, formatBeijingDateTime, formatBeijingTime, type ChartBar } from "../chartController";
+import { formatBeijingDateTime, formatBeijingTime, type ChartBar } from "../chartController";
 import type { Candle, MarketSymbolHealth, Opportunity } from "../types";
 
 // Bitget's documented default follows the international convention: green up, red down.
@@ -65,7 +65,6 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
   const chart = useRef<IChartApi | null>(null);
   const candle = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volume = useRef<ISeriesApi<"Histogram"> | null>(null);
-  const updater = useRef<ReturnType<typeof createIncrementalSeriesUpdater> | null>(null);
   const viewKey = useRef<string | null>(null);
   const data = useMemo(() => toBars(candles), [candles]);
 
@@ -84,23 +83,25 @@ function MiniChart({ selected, candles, timeframe, primary, secondary }: { selec
     subPane.setHeight(108);
     const volumeSeries = instance.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1);
     chart.current = instance; candle.current = candleSeries; volume.current = volumeSeries;
-    updater.current = createIncrementalSeriesUpdater({ setData: (values) => candleSeries.setData(values.map(({ volume: _volume, ...bar }) => ({ ...bar, time: bar.time as UTCTimestamp }))), update: ({ volume: _volume, ...bar }) => candleSeries.update({ ...bar, time: bar.time as UTCTimestamp }) });
     const resize = new ResizeObserver(([entry]) => instance.applyOptions({ width: entry.contentRect.width, height: entry.contentRect.height }));
     resize.observe(host.current); return () => { resize.disconnect(); instance.remove(); };
   }, []);
 
   useEffect(() => {
     if (!data.length) return;
-    updater.current?.sync(`${selected.symbol}:${timeframe}`, data);
+    // Each selected period is a separate asynchronous snapshot. Replacing the
+    // full series is essential: an incremental update only changes the last
+    // candle and would leave the previous timeframe visible.
+    candle.current?.setData(data.map(({ volume: _volume, ...bar }) => ({ ...bar, time: bar.time as UTCTimestamp })));
     const nextViewKey = `${selected.symbol}:${timeframe}`;
     if (viewKey.current !== nextViewKey) { viewKey.current = nextViewKey; chart.current?.timeScale().fitContent(); }
     chart.current?.timeScale().scrollToRealTime();
   }, [data, selected.symbol, timeframe]);
 
   useEffect(() => {
-    if (!chart.current || !volume.current) return;
+    if (!chart.current) return;
     const old = volume.current;
-    chart.current.removeSeries(old);
+    if (old) chart.current.removeSeries(old);
     const series = secondary === "VOLUME"
       ? chart.current.addSeries(HistogramSeries, { priceFormat: { type: "volume" } }, 1)
       : chart.current.addSeries(LineSeries, { color: secondary === "RSI" ? "#d7a84e" : "#b58cff", lineWidth: 1, lastValueVisible: true, priceLineVisible: false }, 1);
@@ -151,6 +152,8 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
     if (!selected || mode !== "live") return;
     const abort = new AbortController();
     const interval = TIMEFRAMES.find((item) => item.label === timeframe)!.interval;
+    // Never show old-period candles while a new source period is loading.
+    setPeriodCandles([]);
     setPeriodLoading(true);
     fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(selected.symbol)}/candles?interval=${interval}`, { signal: abort.signal })
       .then((response) => response.ok ? response.json() as Promise<Candle[]> : Promise.reject(new Error("candle source unavailable")))
@@ -164,6 +167,6 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
   const healthLabel = health?.status === "healthy" ? `${base} 行情健康` : health?.status === "degraded" ? `${base} 行情降级` : health?.status === "unavailable" ? `${base} 行情不可用` : `${base} 行情待确认`;
   return <main className="signal-canvas"><div className="instrument-head"><div><span className="eyebrow">SELECTED INSTRUMENT · UTC+8</span><h1>{base}<small> / USDT PERP</small></h1></div><div className={`direction-lock ${direction?.toLowerCase() ?? "watch"}`}><span>{direction ?? "NO TRADE"}</span><strong>{selected.confidence}</strong><small>{selected.state === "FORMING" ? "观察强度" : "结构可信度"}</small></div></div>
     <div className="setup-ribbon"><span><Layers3 size={14} />{selected.title}</span><span><Clock3 size={14} />{selected.state === "ENTRY_VALID" ? "有效窗口开启" : "等待触发"}</span><span className={`data-fresh ${health?.status === "healthy" ? "" : "unhealthy"}`}>{health?.status === "healthy" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{healthLabel}</span></div>
-    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button type="button" key={item.label} aria-pressed={timeframe === item.label} className={timeframe === item.label ? "active" : ""} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option></select></label></div>{mode === "live" && (periodCandles ?? candles).length ? <MiniChart selected={selected} candles={periodCandles ?? candles} timeframe={timeframe} primary={primary} secondary={secondary} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>{periodLoading && candles.length ? `正在加载 ${timeframe} 实时 K 线` : "暂无可验证的实时 K 线"}</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && (periodCandles ?? candles).length ? `${timeframe} · BYBIT PUBLIC · UTC+8` : "NO MARKET DATA"}</div></div>
+    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button type="button" key={item.label} aria-pressed={timeframe === item.label} className={timeframe === item.label ? "active" : ""} onPointerDown={(event) => event.stopPropagation()} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option></select></label></div>{mode === "live" && (periodCandles ?? candles).length ? <MiniChart selected={selected} candles={periodCandles ?? candles} timeframe={timeframe} primary={primary} secondary={secondary} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>{periodLoading && candles.length ? `正在加载 ${timeframe} 实时 K 线` : "暂无可验证的实时 K 线"}</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && (periodCandles ?? candles).length ? `${timeframe} · PUBLIC FUTURES · UTC+8` : "NO MARKET DATA"}</div></div>
     <section className="evidence-panel"><AnalysisStrip selected={selected} /><div className="section-title"><div><span className="eyebrow">WHY NOW</span><h3>核心证据</h3></div></div><div className="evidence-grid">{selected.evidence.slice(0, 3).map((item, index) => <article key={item.code}><span>0{index + 1}</span><div><strong>{item.text}</strong><small>{item.value ? `实时值 ${item.value}` : "多源数据已确认"}</small></div><CheckCircle2 size={17} /></article>)}</div>{selected.risk && <div className="risk-line"><AlertTriangle size={15} /><strong>主要风险</strong><span>{selected.risk}</span></div>}</section></main>;
 }

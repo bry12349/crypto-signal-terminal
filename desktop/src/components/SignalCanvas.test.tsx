@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const chartMock = vi.hoisted(() => ({ removed: false }));
 
@@ -18,6 +18,8 @@ vi.mock("lightweight-charts", () => ({
   },
 }));
 
+afterEach(() => vi.unstubAllGlobals());
+
 import { demoSnapshot } from "../demo";
 import { SignalCanvas } from "./SignalCanvas";
 
@@ -30,6 +32,19 @@ describe("SignalCanvas", () => {
     const candles = Array.from({ length: 24 }, (_, index) => ({ timestamp: 1_787_830_000 + index * 300, open: "100", high: "102", low: "99", close: "101", volume: "12" }));
     const view = render(<StrictMode><SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={candles} health={undefined} /></StrictMode>);
     expect(() => view.unmount()).not.toThrow();
+  });
+
+  it("keeps the visible chart mounted when the five-second market snapshot replaces equivalent candles", async () => {
+    const candles = Array.from({ length: 24 }, (_, index) => ({ timestamp: 1_787_830_000 + index * 300, open: "100", high: "102", low: "99", close: "101", volume: "12" }));
+    let keepSecondRequestPending!: () => void;
+    const secondRequest = new Promise<Response>((resolve) => { keepSecondRequestPending = () => resolve({ ok: true, json: async () => candles } as Response); });
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce({ ok: true, json: async () => candles }).mockImplementationOnce(() => secondRequest));
+    const view = render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={candles} health={undefined} />);
+    await waitFor(() => expect(screen.getByLabelText("北京时间 5m K 线图")).toBeVisible());
+    view.rerender(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[...candles]} health={undefined} />);
+    expect(screen.getByLabelText("北京时间 5m K 线图")).toBeVisible();
+    keepSecondRequestPending();
   });
 
   it("never substitutes fabricated candles when live data is unavailable", () => {

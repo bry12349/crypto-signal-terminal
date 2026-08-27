@@ -164,16 +164,22 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
     if (!selected || mode !== "live") return;
     const abort = new AbortController();
     const interval = TIMEFRAMES.find((item) => item.label === timeframe)!.interval;
-    // Never show old-period candles while a new source period is loading.
+    // Only a user-selected symbol/period change may clear the chart. Market
+    // snapshots replace `candles` every five seconds, and clearing here on
+    // each replacement caused a visible chart flash before the next response.
     setPeriodCandles([]);
     setPeriodLoading(true);
-    fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(selected.symbol)}/candles?interval=${interval}`, { signal: abort.signal })
-      .then((response) => response.ok ? response.json() as Promise<Candle[]> : Promise.reject(new Error("candle source unavailable")))
-      .then((values) => { if (!abort.signal.aborted) setPeriodCandles(values); })
-      .catch(() => { if (!abort.signal.aborted) setPeriodCandles(timeframe === "5m" ? candles : []); })
-      .finally(() => { if (!abort.signal.aborted) setPeriodLoading(false); });
-    return () => abort.abort();
-  }, [candles, mode, selected?.symbol, timeframe]);
+    const refresh = () => {
+      fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(selected.symbol)}/candles?interval=${interval}`, { signal: abort.signal })
+        .then((response) => response.ok ? response.json() as Promise<Candle[]> : Promise.reject(new Error("candle source unavailable")))
+        .then((values) => { if (!abort.signal.aborted) setPeriodCandles(values); })
+        .catch(() => { if (!abort.signal.aborted) setPeriodCandles(timeframe === "5m" ? candles : []); })
+        .finally(() => { if (!abort.signal.aborted) setPeriodLoading(false); });
+    };
+    refresh();
+    const poll = window.setInterval(refresh, 5000);
+    return () => { abort.abort(); window.clearInterval(poll); };
+  }, [mode, selected?.symbol, timeframe]);
   if (!selected) return <main className="signal-canvas empty-canvas"><Crosshair size={26} /><h2>当前无可执行机会</h2><p>只有满足触发、流动性与风控条件的结构才会出现在这里。</p></main>;
   const direction = selected.order_plan?.direction; const base = selected.symbol.replace("USDT", "");
   const healthLabel = health?.status === "healthy" ? `${base} 行情健康` : health?.status === "degraded" ? `${base} 行情降级` : health?.status === "unavailable" ? `${base} 行情不可用` : `${base} 行情待确认`;

@@ -86,6 +86,17 @@ describe("SignalCanvas", () => {
     expect(screen.getByText("BSC · Binance Web3 公开钱包")).toBeVisible();
   });
 
+  it("loads the selected wallet token from the on-chain OHLCV endpoint", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
+    render(<SignalCanvas
+      selected={{ ...demoSnapshot.opportunities[0], source: "SMART_MONEY", symbol: "MEMESTOCK", onchain_token_address: "0xtoken", title: "公开钱包追踪", source_label: "BSC · Binance Web3 公开钱包" }}
+      mode="live"
+      candles={[]}
+      health={undefined}
+    />);
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/v1/onchain/bsc/0xtoken/candles?interval=5"), expect.anything()));
+  });
+
   it("surfaces unavailable news as an explicit bias instead of fabricating it", () => {
     render(<SignalCanvas selected={{ ...demoSnapshot.opportunities[0], analysis: {
       opportunity_score: 70, confidence: 72, p_tp_before_sl: "0.62", expected_value: "0.11", evidence_conflict: "0.14", is_tradeable: true,

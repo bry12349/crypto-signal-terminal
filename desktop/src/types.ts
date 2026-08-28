@@ -59,6 +59,7 @@ export interface Opportunity {
   risk: string | null;
   source_label: string | null;
   market_symbol?: string | null;
+  onchain_token_address?: string | null;
   updated_at: string;
   evidence: Evidence[];
   order_plan: OrderPlan | null;
@@ -75,6 +76,7 @@ export interface SmartMoneyCandidate {
   evidence: Evidence[];
   wallet?: string | null;
   chain?: string | null;
+  token_address?: string | null;
 }
 
 export interface Candle {

@@ -171,6 +171,7 @@ class LiveMarketScanner:
                 observed_at=observed_at,
                 wallet=flow.wallet,
                 chain="BSC · Binance Web3 公开钱包",
+                token_address=flow.token_address,
                 evidence=(
                     Evidence(
                         code="public_wallet_tracking",

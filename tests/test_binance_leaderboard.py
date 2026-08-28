@@ -20,7 +20,7 @@ async def test_web3_tracker_bootstraps_public_wallet_roster_then_emits_activity_
             "buyVolume": "320000",
             "sellVolume": "180000",
             "lastActivity": 1000,
-            "topEarningTokens": [{"tokenSymbol": "SOL", "realizedPnl": "50000"}],
+            "topEarningTokens": [{"tokenAddress": "0xsol", "tokenSymbol": "SOL", "realizedPnl": "50000"}],
         }],
         [{
             "address": "0xabc",
@@ -32,7 +32,7 @@ async def test_web3_tracker_bootstraps_public_wallet_roster_then_emits_activity_
             "buyVolume": "350000",
             "sellVolume": "180000",
             "lastActivity": 2000,
-            "topEarningTokens": [{"tokenSymbol": "SOL", "realizedPnl": "50000"}],
+            "topEarningTokens": [{"tokenAddress": "0xsol", "tokenSymbol": "SOL", "realizedPnl": "50000"}],
         }],
     ]
 
@@ -48,6 +48,7 @@ async def test_web3_tracker_bootstraps_public_wallet_roster_then_emits_activity_
     assert roster[0].is_baseline is True
     assert roster[0].wallet == "0xabc"
     assert roster[0].token_symbol == "SOL"
+    assert roster[0].token_address == "0xsol"
     assert activity[0].is_baseline is False
     assert activity[0].notional_delta == Decimal("30000")
     assert activity[0].direction is Direction.LONG

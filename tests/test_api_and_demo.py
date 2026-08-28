@@ -35,6 +35,19 @@ def test_candle_endpoint_requests_the_selected_exchange_interval() -> None:
     assert response.json()[0]["timestamp"] == 1_700_000_000
 
 
+def test_onchain_candle_endpoint_requests_bsc_token_history() -> None:
+    class OnchainMarket:
+        async def candles(self, token_address: str, interval: str, limit: int):
+            assert (token_address, interval, limit) == ("0xtoken", "60", 300)
+            return (Candle(timestamp=1_700_000_000, open="1", high="2", low="0.5", close="1.5", volume="42"),)
+
+    state = build_live_state()
+    state.onchain_market_provider = OnchainMarket()
+    response = TestClient(create_app(state)).get("/api/v1/onchain/bsc/0xtoken/candles", params={"interval": "60"})
+    assert response.status_code == 200
+    assert response.json()[0]["close"] == "1.5"
+
+
 def test_derivatives_endpoint_exposes_real_open_interest_and_funding_series() -> None:
     class Market:
         async def derivatives(self, symbol: str, interval: str, limit: int):

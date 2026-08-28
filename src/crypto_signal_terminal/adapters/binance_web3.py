@@ -36,6 +36,7 @@ class OnchainWalletFlow:
     notional_delta: Decimal
     score: int
     is_baseline: bool
+    token_address: str | None = None
     source: str = "binance_web3_public_wallet"
 
 
@@ -48,6 +49,7 @@ class _WalletSnapshot:
     label: str
     token_symbol: str
     score: int
+    token_address: str | None = None
 
 
 class BinanceWeb3WalletTracker:
@@ -85,7 +87,8 @@ class BinanceWeb3WalletTracker:
         if not address:
             return None
         tokens = row.get("topEarningTokens") or []
-        token_symbol = _symbol(tokens[0].get("tokenSymbol")) if isinstance(tokens, list) and tokens and isinstance(tokens[0], dict) else "ONCHAIN"
+        token = tokens[0] if isinstance(tokens, list) and tokens and isinstance(tokens[0], dict) else {}
+        token_symbol = _symbol(token.get("tokenSymbol")) if token else "ONCHAIN"
         token_symbol = token_symbol if len(token_symbol) >= 2 else "ONCHAIN"
         return _WalletSnapshot(
             activity=int(row.get("lastActivity") or 0),
@@ -94,6 +97,7 @@ class BinanceWeb3WalletTracker:
             sell_volume=_decimal(row.get("sellVolume")),
             label=str(row.get("addressLabel") or "公开链上地址"),
             token_symbol=token_symbol,
+            token_address=str(token.get("tokenAddress") or "").lower() or None,
             score=cls._score(row),
         )
 
@@ -137,6 +141,7 @@ class BinanceWeb3WalletTracker:
                 wallet=wallet,
                 label=current.label,
                 token_symbol=current.token_symbol,
+                token_address=current.token_address,
                 direction=direction,
                 notional_delta=notional_delta,
                 score=current.score,

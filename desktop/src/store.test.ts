@@ -17,6 +17,7 @@ describe("mergeSignalPaths", () => {
         observed_at: "2026-08-28T00:00:00Z",
         wallet: "0xabc",
         chain: "BSC · Binance Web3 公开钱包",
+        token_address: "0xtoken",
         evidence: [],
       }],
     });
@@ -24,6 +25,7 @@ describe("mergeSignalPaths", () => {
     expect(opportunities[0].title).toBe("公开钱包追踪")
     expect(opportunities[0].risk).toContain("不等同于 CEX 开仓")
     expect(opportunities[0].market_symbol).toBe("BTCUSDT")
+    expect(opportunities[0].onchain_token_address).toBe("0xtoken")
   });
 
   it("uses BTC as the chart benchmark when a wallet token has no verified perpetual market", () => {

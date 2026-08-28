@@ -29,6 +29,7 @@ class ApplicationState:
     paper_orders: list[dict] = field(default_factory=list)
     market_candles: dict[str, list[dict]] = field(default_factory=dict)
     market_provider: Any | None = None
+    onchain_market_provider: Any | None = None
     cycle_height_provider: Any | None = None
     dune_health: str = "not_configured"
     subscribers: set[asyncio.Queue] = field(default_factory=set)
@@ -113,6 +114,18 @@ def create_app(
             values = await runtime.market_provider.candles(symbol.upper(), interval, max(50, min(limit, 500)))
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Live candle source is unavailable") from exc
+        return [item.model_dump(mode="json") for item in values]
+
+    @app.get("/api/v1/onchain/bsc/{token_address}/candles")
+    async def onchain_candles(token_address: str, interval: str = "5", limit: int = 300) -> list[dict]:
+        if interval not in {"5", "15", "60", "240"}:
+            raise HTTPException(status_code=422, detail="Unsupported candle interval")
+        if runtime.onchain_market_provider is None:
+            raise HTTPException(status_code=503, detail="On-chain candle source is unavailable")
+        try:
+            values = await runtime.onchain_market_provider.candles(token_address.lower(), interval, max(50, min(limit, 300)))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="On-chain candle source is unavailable") from exc
         return [item.model_dump(mode="json") for item in values]
 
     @app.get("/api/v1/markets/{symbol}/derivatives")

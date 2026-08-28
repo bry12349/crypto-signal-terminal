@@ -14,6 +14,7 @@ export function mergeSignalPaths(snapshot: Snapshot): Opportunity[] {
     title: item.wallet ? "公开钱包追踪" : item.direction === "LONG" ? "聪明钱流入候选" : "聪明钱流出候选",
     risk: item.wallet ? "链上钱包观察不等同于 CEX 开仓；仍需行情、流动性与触发确认" : "候选行为不会绕过入场触发",
     source_label: item.chain ?? "合约订单流",
+    onchain_token_address: item.token_address ?? null,
     // A wallet ranking can mention tokens that have no verified perpetual
     // market. Only chart a pair present in this snapshot; otherwise use the
     // clearly labelled BTC benchmark rather than requesting a fictitious pair.

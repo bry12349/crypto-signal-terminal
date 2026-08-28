@@ -167,6 +167,7 @@ class SmartMoneyCandidate(FrozenModel):
     evidence: tuple[Evidence, ...]
     wallet: str | None = None
     chain: str | None = None
+    token_address: str | None = None
 
 
 class Candle(FrozenModel):

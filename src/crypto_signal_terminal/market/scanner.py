@@ -10,7 +10,9 @@ from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
 from crypto_signal_terminal.engines.evidence_fusion import EvidenceFusion
+from crypto_signal_terminal.engines.signal_ledger import SignalRecord, settle_signal
 from crypto_signal_terminal.market.health import classify_market_error
+from crypto_signal_terminal.storage import AuditStore
 
 
 class MarketProvider(Protocol):
@@ -69,6 +71,7 @@ class LiveMarketScanner:
         universe: Any | None = None,
         interval_seconds: float = 5,
         max_concurrency: int = 6,
+        audit_store: AuditStore | None = None,
     ) -> None:
         self.state = state
         self.market = market
@@ -76,10 +79,48 @@ class LiveMarketScanner:
         self.universe = universe
         self.interval_seconds = interval_seconds
         self.max_concurrency = max(1, max_concurrency)
+        self.audit_store = audit_store
+        self._active_strategy_ids: set[str] = set()
         self.trend = TrendEngine()
         self.altcoin = AltcoinEngine()
         self.smart = SmartMoneyEngine()
         self.state.market_health_registry.set_watchlist(watchlist)
+
+    def _settle_recorded_signals(self, snapshots: list[MarketSnapshot]) -> None:
+        if self.audit_store is None:
+            return
+        by_symbol = {snapshot.symbol: snapshot for snapshot in snapshots}
+        for record in self.audit_store.signal_records():
+            snapshot = by_symbol.get(record.symbol)
+            if snapshot is None:
+                continue
+            settled = settle_signal(record, snapshot.candles, now=snapshot.observed_at)
+            if settled != record:
+                self.audit_store.upsert_signal_record(settled)
+
+    def _record_new_signals(self, opportunities: list[Opportunity]) -> None:
+        if self.audit_store is None:
+            return
+        active = {
+            opportunity.id
+            for opportunity in opportunities
+            if opportunity.state is LifecycleState.ENTRY_VALID and opportunity.order_plan is not None
+        }
+        for opportunity in opportunities:
+            if opportunity.id not in active or opportunity.id in self._active_strategy_ids:
+                continue
+            record = SignalRecord(
+                signal_id=f"{opportunity.id}:{int(opportunity.created_at.timestamp())}",
+                symbol=opportunity.symbol,
+                plan=opportunity.order_plan,
+                generated_at=opportunity.created_at,
+                predicted_probability=opportunity.analysis.p_tp_before_sl if opportunity.analysis else None,
+                expected_value=opportunity.analysis.expected_value if opportunity.analysis else None,
+                market_regime=opportunity.analysis.market_regime if opportunity.analysis else None,
+                signal_type=opportunity.analysis.signal_type if opportunity.analysis else None,
+            )
+            self.audit_store.upsert_signal_record(record)
+        self._active_strategy_ids = active
 
     async def scan_once(self) -> int:
         if self.universe is not None:
@@ -118,6 +159,7 @@ class LiveMarketScanner:
             self.state.mode = "live"
             self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
             return 0
+        self._settle_recorded_signals(snapshots)
         opportunities = []
         smart_money = []
         for snapshot in snapshots:
@@ -131,6 +173,7 @@ class LiveMarketScanner:
             if candidate:
                 smart_money.append(candidate)
         self.state.opportunities = sorted(opportunities, key=lambda item: item.confidence, reverse=True)
+        self._record_new_signals(self.state.opportunities)
         self.state.smart_money = sorted(smart_money, key=lambda item: item.score, reverse=True)
         self.state.market_health = self.state.market_health_registry.overall
         self.state.mode = "live"

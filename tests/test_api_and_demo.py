@@ -1,5 +1,7 @@
 import json
+from dataclasses import replace
 from datetime import timedelta
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +10,7 @@ from crypto_signal_terminal.config import MemorySecretStore
 from crypto_signal_terminal.main import build_demo_state, build_live_state, parent_is_gone, parse_args, run_demo_replay, secret_store_for_mode
 from crypto_signal_terminal.storage import AuditStore
 from crypto_signal_terminal.domain.models import Candle
+from crypto_signal_terminal.engines.signal_ledger import SignalOutcome, SignalRecord
 
 
 def test_snapshot_exposes_all_signal_paths_without_secrets() -> None:
@@ -131,6 +134,25 @@ def test_paper_order_is_persisted_and_available_from_history(tmp_path) -> None:
     assert history[0]["id"] == prepared.json()["id"]
     assert history[0]["symbol"] == opportunity.symbol
     assert AuditStore(tmp_path / "audit.sqlite3").paper_orders()[0]["id"] == prepared.json()["id"]
+
+
+def test_performance_endpoint_reports_settled_signal_results(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    state = build_demo_state()
+    opportunity = next(item for item in state.opportunities if item.order_plan is not None)
+    store.upsert_signal_record(replace(
+        SignalRecord(signal_id="trend:btc:performance", symbol="BTCUSDT", plan=opportunity.order_plan, generated_at=opportunity.created_at, predicted_probability=Decimal("0.68")),
+        outcome=SignalOutcome.TP1,
+        settled_at=opportunity.updated_at,
+    ))
+
+    response = TestClient(create_app(state, audit_store=store)).get("/api/v1/performance")
+
+    assert response.status_code == 200
+    assert response.json()["settled"] == 1
+    assert response.json()["wins"] == 1
+    assert response.json()["win_rate"] == 1.0
+    assert response.json()["calibration"] == [{"bucket": "0.6-0.7", "count": 1, "predicted": 0.68, "observed": 1.0}]
 
 
 def test_audit_store_removes_retired_message_tables(tmp_path) -> None:

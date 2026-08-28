@@ -4,6 +4,9 @@ import json
 import sqlite3
 from pathlib import Path
 
+from crypto_signal_terminal.engines.signal_ledger import SignalRecord
+from crypto_signal_terminal.engines.signal_ledger import SignalOutcome
+
 
 class AuditStore:
     """Local persistence for paper-order history only.
@@ -36,6 +39,13 @@ class AuditStore:
               payload_json TEXT NOT NULL
             )"""
         )
+        self._connection.execute(
+            """CREATE TABLE IF NOT EXISTS signal_records (
+              signal_id TEXT PRIMARY KEY,
+              generated_at TEXT NOT NULL,
+              payload_json TEXT NOT NULL
+            )"""
+        )
         self._connection.commit()
 
     def _retire_message_tables(self) -> None:
@@ -57,6 +67,53 @@ class AuditStore:
             (bounded,),
         ).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
+
+    def upsert_signal_record(self, record: SignalRecord) -> None:
+        payload = json.dumps(record.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        self._connection.execute(
+            """INSERT INTO signal_records (signal_id, generated_at, payload_json)
+               VALUES (?, ?, ?)
+               ON CONFLICT(signal_id) DO UPDATE SET payload_json=excluded.payload_json""",
+            (record.signal_id, record.generated_at.isoformat(), payload),
+        )
+        self._connection.commit()
+
+    def signal_records(self, *, limit: int = 1_000) -> list[SignalRecord]:
+        bounded = max(1, min(10_000, limit))
+        rows = self._connection.execute(
+            "SELECT payload_json FROM signal_records ORDER BY generated_at DESC LIMIT ?", (bounded,),
+        ).fetchall()
+        return [SignalRecord.from_dict(json.loads(row["payload_json"])) for row in rows]
+
+    def signal_performance(self) -> dict:
+        records = self.signal_records(limit=10_000)
+        settled = [record for record in records if record.outcome in {SignalOutcome.TP1, SignalOutcome.STOP}]
+        wins = sum(record.outcome is SignalOutcome.TP1 for record in settled)
+        buckets: dict[int, list[SignalRecord]] = {}
+        for record in settled:
+            if record.predicted_probability is None:
+                continue
+            bucket = min(9, int(record.predicted_probability * 10))
+            buckets.setdefault(bucket, []).append(record)
+        calibration = [
+            {
+                "bucket": f"{bucket / 10:.1f}-{(bucket + 1) / 10:.1f}",
+                "count": len(items),
+                "predicted": float(sum(item.predicted_probability or 0 for item in items) / len(items)),
+                "observed": sum(item.outcome is SignalOutcome.TP1 for item in items) / len(items),
+            }
+            for bucket, items in sorted(buckets.items())
+        ]
+        return {
+            "total": len(records),
+            "settled": len(settled),
+            "wins": wins,
+            "losses": len(settled) - wins,
+            "ambiguous": sum(record.outcome is SignalOutcome.AMBIGUOUS for record in records),
+            "unfilled": sum(record.outcome is SignalOutcome.EXPIRED_UNFILLED for record in records),
+            "win_rate": wins / len(settled) if settled else 0.0,
+            "calibration": calibration,
+        }
 
     def close(self) -> None:
         self._connection.close()

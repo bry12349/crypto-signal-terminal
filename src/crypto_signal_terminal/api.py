@@ -177,6 +177,12 @@ def create_app(
             return audit_store.paper_orders(limit=bounded)
         return list(reversed(runtime.paper_orders[-bounded:]))
 
+    @app.get("/api/v1/performance")
+    async def performance() -> dict:
+        if audit_store is None:
+            return {"total": 0, "settled": 0, "wins": 0, "losses": 0, "ambiguous": 0, "unfilled": 0, "win_rate": 0.0, "calibration": []}
+        return audit_store.signal_performance()
+
     @app.websocket("/api/v1/events")
     async def events(websocket: WebSocket) -> None:
         await websocket.accept()

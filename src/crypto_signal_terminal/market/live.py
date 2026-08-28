@@ -143,7 +143,7 @@ class BybitCompositeMarketClient:
 
     async def _binance_snapshot(self, symbol: str, started: datetime) -> MarketSnapshot:
         client = self._binance_client
-        ticker, four, hour, fifteen, five, book, trades, oi = await asyncio.gather(
+        ticker, four, hour, fifteen, five, book, trades, oi, oi_history = await asyncio.gather(
             client.get("/fapi/v1/ticker/24hr", params={"symbol": symbol}),
             client.get("/fapi/v1/klines", params={"symbol": symbol, "interval": "4h", "limit": 24}),
             client.get("/fapi/v1/klines", params={"symbol": symbol, "interval": "1h", "limit": 24}),
@@ -152,14 +152,18 @@ class BybitCompositeMarketClient:
             client.get("/fapi/v1/depth", params={"symbol": symbol, "limit": 50}),
             client.get("/fapi/v1/aggTrades", params={"symbol": symbol, "limit": 200}),
             client.get("/fapi/v1/openInterest", params={"symbol": symbol}),
+            client.get("/futures/data/openInterestHist", params={"symbol": symbol, "period": "5m", "limit": 2}),
         )
-        for response in (ticker, four, hour, fifteen, five, book, trades, oi): response.raise_for_status()
+        for response in (ticker, four, hour, fifteen, five, book, trades, oi, oi_history): response.raise_for_status()
         ticker_item = ticker.json(); received_at = self.clock(); price = _d(ticker_item["lastPrice"])
         def rows(response: httpx.Response) -> list: return response.json()
         def candle_rows(response: httpx.Response) -> list: return [[item[0], item[1], item[2], item[3], item[4], item[5]] for item in rows(response)]
         book_data = book.json(); trade_rows = [{"side": "Sell" if item["m"] else "Buy", "size": item["q"], "price": item["p"]} for item in trades.json()]
         oi_value = oi.json()["openInterest"]
-        features = self._features(candle_rows(four), candle_rows(hour), candle_rows(fifteen), candle_rows(five), {"b": book_data["bids"], "a": book_data["asks"]}, trade_rows, [{"openInterest": oi_value}, {"openInterest": oi_value}])
+        # Binance returns historical OI in chronological order; feature fusion
+        # expects the most recent value first, matching the Bybit response.
+        oi_rows = [{"openInterest": item.get("sumOpenInterest", "0")} for item in reversed(oi_history.json())]
+        features = self._features(candle_rows(four), candle_rows(hour), candle_rows(fifteen), candle_rows(five), {"b": book_data["bids"], "a": book_data["asks"]}, trade_rows, oi_rows)
         values = candle_rows(five)
         return MarketSnapshot(symbol=symbol, exchange="binance-public-composite", observed_at=received_at, price=price, bid=_d(ticker_item["bidPrice"]), ask=_d(ticker_item["askPrice"]), open_interest=_d(oi_value), funding_rate=_d(ticker_item.get("lastFundingRate")), volume_24h=_d(ticker_item.get("quoteVolume")), data_health=DataHealth(healthy=True, observed_at=received_at, latency_ms=max(0, int((received_at - started).total_seconds() * 1000))), peer_confirmations=1, features=features, candles=tuple(Candle(timestamp=int(row[0]) // 1000, open=_d(row[1]), high=_d(row[2]), low=_d(row[3]), close=_d(row[4]), volume=_d(row[5])) for row in values))
 

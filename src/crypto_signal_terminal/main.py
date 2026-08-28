@@ -120,7 +120,7 @@ def run() -> None:
     state.market_provider = live_market
     state.cycle_height_provider = BitcoinHeightClient()
     hot_universe = MajorExchangeHotUniverse()
-    scanner = LiveMarketScanner(state=state, market=live_market, universe=hot_universe)
+    scanner = LiveMarketScanner(state=state, market=live_market, universe=hot_universe, audit_store=store)
 
     async def background(stop):
         services = [exit_when_parent_is_gone(stop)]

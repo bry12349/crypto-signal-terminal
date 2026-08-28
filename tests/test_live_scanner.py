@@ -1,7 +1,8 @@
 from crypto_signal_terminal.main import _market, build_demo_state
 from crypto_signal_terminal.main import build_live_state
-from crypto_signal_terminal.domain.models import LifecycleState
+from crypto_signal_terminal.domain.models import Candle, LifecycleState
 from crypto_signal_terminal.market.scanner import LiveMarketScanner
+from crypto_signal_terminal.storage import AuditStore
 
 
 async def test_scanner_refreshes_native_and_smart_money_opportunities() -> None:
@@ -115,3 +116,26 @@ def test_scanner_uses_fast_refresh_without_unbounded_parallelism() -> None:
     scanner = LiveMarketScanner(state=build_live_state(), market=object(), watchlist=("BTCUSDT",))
     assert scanner.interval_seconds == 5
     assert scanner.max_concurrency == 6
+
+
+async def test_scanner_records_and_settles_actionable_signal_outcomes(tmp_path) -> None:
+    initial = _market(
+        "BTCUSDT", "67000", trend_4h=1, trend_1h=1, setup_15m=1,
+        trigger_5m=1, aggressive_flow_imbalance="0.6", depth_imbalance="0.2",
+        flow_persistence="0.8", oi_change_ratio="0.05", price_impact_bps="12",
+    )
+    target = initial.model_copy(update={"candles": (
+        Candle(timestamp=int(initial.observed_at.timestamp()) + 300, open="67000", high="67650", low="66900", close="67600", volume="10"),
+    )})
+    snapshots = [initial, target]
+
+    class Market:
+        async def snapshot(self, symbol: str): return snapshots.pop(0)
+
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    scanner = LiveMarketScanner(state=build_live_state(), market=Market(), watchlist=("BTCUSDT",), audit_store=store)
+    await scanner.scan_once()
+    assert store.signal_records()[0].outcome.value == "PENDING"
+
+    await scanner.scan_once()
+    assert store.signal_records()[0].outcome.value == "TP1"

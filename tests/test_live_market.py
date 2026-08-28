@@ -103,9 +103,12 @@ async def test_snapshot_falls_back_to_binance_when_bybit_composite_times_out() -
             return httpx.Response(200, json=[{"m": False, "q": "2000", "p": "100"}] * 10, request=request)
         if path.endswith("openInterest"):
             return httpx.Response(200, json={"openInterest": "1100"}, request=request)
+        if path.endswith("openInterestHist"):
+            return httpx.Response(200, json=[{"sumOpenInterest": "1000"}, {"sumOpenInterest": "1100"}], request=request)
         raise AssertionError(path)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(unavailable), base_url="https://api.bybit.com") as bybit, httpx.AsyncClient(transport=httpx.MockTransport(binance), base_url="https://fapi.binance.com") as futures:
         snapshot = await BybitCompositeMarketClient(client=bybit, binance_client=futures, include_peers=False).snapshot("BTCUSDT")
     assert snapshot.exchange == "binance-public-composite"
     assert snapshot.price == Decimal("100")
+    assert Decimal(str(snapshot.features["oi_change_ratio"])) == Decimal("0.1")

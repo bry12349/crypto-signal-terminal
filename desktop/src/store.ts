@@ -4,15 +4,15 @@ import type { BtcCycle, Health, Opportunity, Snapshot } from "./types";
 
 const API = "http://127.0.0.1:8765";
 
-function mergeSignalPaths(snapshot: Snapshot): Opportunity[] {
+export function mergeSignalPaths(snapshot: Snapshot): Opportunity[] {
   const smart: Opportunity[] = snapshot.smart_money.map((item) => ({
     id: item.id,
     symbol: item.symbol,
     source: "SMART_MONEY",
     state: "ARMED",
     confidence: item.score,
-    title: item.direction === "LONG" ? "聪明钱流入候选" : "聪明钱流出候选",
-    risk: "候选行为不会绕过入场触发",
+    title: item.wallet ? "公开钱包追踪" : item.direction === "LONG" ? "聪明钱流入候选" : "聪明钱流出候选",
+    risk: item.wallet ? "链上钱包观察不等同于 CEX 开仓；仍需行情、流动性与触发确认" : "候选行为不会绕过入场触发",
     source_label: item.chain ?? "合约订单流",
     updated_at: item.observed_at,
     evidence: item.evidence,

@@ -1,6 +1,9 @@
 from crypto_signal_terminal.main import _market, build_demo_state
 from crypto_signal_terminal.main import build_live_state
-from crypto_signal_terminal.domain.models import Candle, LifecycleState
+from decimal import Decimal
+
+from crypto_signal_terminal.adapters.binance_web3 import OnchainWalletFlow
+from crypto_signal_terminal.domain.models import Candle, Direction, LifecycleState, SmartMoneyKind
 from crypto_signal_terminal.market.scanner import LiveMarketScanner
 from crypto_signal_terminal.storage import AuditStore
 
@@ -139,3 +142,36 @@ async def test_scanner_records_and_settles_actionable_signal_outcomes(tmp_path) 
 
     await scanner.scan_once()
     assert store.signal_records()[0].outcome.value == "TP1"
+
+
+async def test_scanner_surfaces_public_onchain_wallet_roster_without_claiming_a_cex_order() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(symbol, "67000", trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1)
+
+    class WalletTracker:
+        async def observe(self):
+            return (OnchainWalletFlow(
+                wallet="0xabc",
+                label="链上高手",
+                token_symbol="SOL",
+                direction=Direction.LONG,
+                notional_delta=Decimal("500000"),
+                score=84,
+                is_baseline=True,
+            ),)
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(
+        state=state,
+        market=Market(),
+        watchlist=("BTCUSDT",),
+        wallet_tracker=WalletTracker(),
+    )
+
+    await scanner.scan_once()
+
+    candidate = next(item for item in state.smart_money if item.wallet == "0xabc")
+    assert candidate.kind is SmartMoneyKind.ONCHAIN_CLUSTER
+    assert candidate.symbol == "SOL"
+    assert candidate.chain == "BSC · Binance Web3 公开钱包"

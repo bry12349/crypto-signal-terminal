@@ -9,6 +9,7 @@ from decimal import Decimal
 import uvicorn
 
 from crypto_signal_terminal.api import ApplicationState, create_app
+from crypto_signal_terminal.adapters.binance_web3 import BinanceWeb3WalletTracker
 from crypto_signal_terminal.adapters.exchanges import BitcoinHeightClient
 from crypto_signal_terminal.config import KeyringSecretStore, MemorySecretStore, SecretStore, Settings
 from crypto_signal_terminal.domain.models import DataHealth, MarketSnapshot
@@ -120,7 +121,14 @@ def run() -> None:
     state.market_provider = live_market
     state.cycle_height_provider = BitcoinHeightClient()
     hot_universe = MajorExchangeHotUniverse()
-    scanner = LiveMarketScanner(state=state, market=live_market, universe=hot_universe, audit_store=store)
+    wallet_tracker = BinanceWeb3WalletTracker()
+    scanner = LiveMarketScanner(
+        state=state,
+        market=live_market,
+        universe=hot_universe,
+        audit_store=store,
+        wallet_tracker=wallet_tracker,
+    )
 
     async def background(stop):
         services = [exit_when_parent_is_gone(stop)]
@@ -131,6 +139,7 @@ def run() -> None:
         finally:
             await live_market.close()
             await hot_universe.close()
+            await wallet_tracker.close()
 
     uvicorn.run(
         create_app(state, secret_store=secrets, audit_store=store, background_runner=background),

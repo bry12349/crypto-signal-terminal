@@ -5,7 +5,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
-from crypto_signal_terminal.domain.models import Direction, Evidence, LifecycleState, MarketSnapshot, Opportunity, SourceKind
+from crypto_signal_terminal.domain.models import (
+    Direction,
+    Evidence,
+    LifecycleState,
+    MarketSnapshot,
+    Opportunity,
+    SmartMoneyCandidate,
+    SmartMoneyKind,
+    SourceKind,
+)
 from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
@@ -17,6 +26,10 @@ from crypto_signal_terminal.storage import AuditStore
 
 class MarketProvider(Protocol):
     async def snapshot(self, symbol: str) -> MarketSnapshot: ...
+
+
+class WalletTracker(Protocol):
+    async def observe(self) -> tuple[Any, ...]: ...
 
 
 DEFAULT_WATCHLIST = (
@@ -72,6 +85,7 @@ class LiveMarketScanner:
         interval_seconds: float = 5,
         max_concurrency: int = 6,
         audit_store: AuditStore | None = None,
+        wallet_tracker: WalletTracker | None = None,
     ) -> None:
         self.state = state
         self.market = market
@@ -80,6 +94,7 @@ class LiveMarketScanner:
         self.interval_seconds = interval_seconds
         self.max_concurrency = max(1, max_concurrency)
         self.audit_store = audit_store
+        self.wallet_tracker = wallet_tracker
         self._active_strategy_ids: set[str] = set()
         self.trend = TrendEngine()
         self.altcoin = AltcoinEngine()
@@ -121,6 +136,39 @@ class LiveMarketScanner:
             )
             self.audit_store.upsert_signal_record(record)
         self._active_strategy_ids = active
+
+    @staticmethod
+    def _wallet_candidates(flows: tuple[Any, ...], observed_at: datetime) -> list[SmartMoneyCandidate]:
+        candidates: list[SmartMoneyCandidate] = []
+        for flow in flows:
+            action = "纳入追踪池" if flow.is_baseline else "出现新的链上活动"
+            direction_text = "买入偏向" if flow.direction is Direction.LONG else "卖出偏向"
+            candidates.append(SmartMoneyCandidate(
+                id=f"onchain-wallet:{flow.wallet}:{int(observed_at.timestamp())}",
+                symbol=flow.token_symbol,
+                kind=SmartMoneyKind.ONCHAIN_CLUSTER,
+                direction=flow.direction,
+                score=flow.score,
+                observed_at=observed_at,
+                wallet=flow.wallet,
+                chain="BSC · Binance Web3 公开钱包",
+                evidence=(
+                    Evidence(
+                        code="public_wallet_tracking",
+                        text=f"{flow.label} {action}，当前{direction_text}",
+                        weight=18 if not flow.is_baseline else 8,
+                        value=flow.notional_delta,
+                        source="binance_web3_public_wallet",
+                    ),
+                    Evidence(
+                        code="public_wallet_scope",
+                        text="公开链上地址排行榜；不是 Binance CEX 账户或其充值地址的归因",
+                        weight=0,
+                        source="binance_web3_public_wallet",
+                    ),
+                ),
+            ))
+        return candidates
 
     async def scan_once(self) -> int:
         if self.universe is not None:
@@ -172,6 +220,14 @@ class LiveMarketScanner:
                 opportunities.append(_forming_observation(snapshot))
             if candidate:
                 smart_money.append(candidate)
+        if self.wallet_tracker is not None:
+            try:
+                flows = await self.wallet_tracker.observe()
+                smart_money.extend(self._wallet_candidates(flows, max(item.observed_at for item in snapshots)))
+            except Exception:
+                # Wallet intelligence is additive and may be temporarily
+                # unavailable without compromising price/signal rendering.
+                pass
         self.state.opportunities = sorted(opportunities, key=lambda item: item.confidence, reverse=True)
         self._record_new_signals(self.state.opportunities)
         self.state.smart_money = sorted(smart_money, key=lambda item: item.score, reverse=True)

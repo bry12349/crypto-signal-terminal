@@ -81,6 +81,36 @@ async def test_total_market_failure_clears_stale_demo_opportunities() -> None:
     assert state.market_health == "degraded"
 
 
+async def test_wallet_tracking_survives_when_all_cex_market_snapshots_fail() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            raise TimeoutError("offline")
+
+    class WalletTracker:
+        async def observe(self):
+            return (OnchainWalletFlow(
+                wallet="0xabc",
+                label="链上高手",
+                token_symbol="SOL",
+                direction=Direction.LONG,
+                notional_delta=Decimal("500000"),
+                score=84,
+                is_baseline=True,
+            ),)
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(
+        state=state,
+        market=Market(),
+        watchlist=("BTCUSDT",),
+        wallet_tracker=WalletTracker(),
+    )
+
+    assert await scanner.scan_once() == 0
+    assert [item.wallet for item in state.smart_money] == ["0xabc"]
+    assert state.opportunities == []
+
+
 async def test_healthy_market_without_trigger_remains_visible_as_forming_observation() -> None:
     class Market:
         async def snapshot(self, symbol: str):
@@ -100,6 +130,25 @@ async def test_healthy_market_without_trigger_remains_visible_as_forming_observa
     assert observation.order_plan is None
     assert observation.title == "实时市场观察 · 等待触发"
     assert observation.risk == "当前不具备可执行条件，系统不会生成订单建议"
+
+
+async def test_forming_observation_exposes_actual_multi_timeframe_and_derivatives_values() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(
+                symbol, "67000", trend_4h=-1, trend_1h=-1, setup_15m=1, trigger_5m=-1,
+                aggressive_flow_imbalance="-0.36", oi_change_ratio="-0.041", funding_rate="0.0008",
+                slippage_bps_1000="4.2",
+            )
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT",))
+    await scanner.scan_once()
+
+    evidence = state.opportunities[0].evidence
+    assert "4h 偏空 · 1h 偏空 · 15m 偏多 · 5m 偏空" in evidence[1].text
+    assert evidence[2].code == "derivatives_live"
+    assert "OI -4.10%" in evidence[2].text
 
 
 async def test_scanner_refreshes_the_altcoin_universe_before_scanning() -> None:

@@ -41,7 +41,19 @@ def _forming_observation(snapshot: MarketSnapshot) -> Opportunity:
     """Keep a healthy market visible without pretending it is tradeable."""
     trend_1h = int(snapshot.features.get("trend_1h", 0))
     flow = Decimal(str(snapshot.features.get("aggressive_flow_imbalance", "0")))
-    structure = "1h 偏多" if trend_1h > 0 else "1h 偏空" if trend_1h < 0 else "1h 暂无明确方向"
+    def trend_label(value: object) -> str:
+        sign = int(value)
+        return "偏多" if sign > 0 else "偏空" if sign < 0 else "中性"
+
+    structure = " · ".join((
+        f"4h {trend_label(snapshot.features.get('trend_4h', 0))}",
+        f"1h {trend_label(trend_1h)}",
+        f"15m {trend_label(snapshot.features.get('setup_15m', 0))}",
+        f"5m {trend_label(snapshot.features.get('trigger_5m', 0))}",
+    ))
+    oi = Decimal(str(snapshot.features.get("oi_change_ratio", "0")))
+    slippage = Decimal(str(snapshot.features.get("slippage_bps_1000", "0")))
+    funding = snapshot.funding_rate * Decimal("100")
     confidence = min(55, 30 + int(abs(flow) * 30) + (8 if trend_1h else 0))
     direction = Direction.LONG if trend_1h >= 0 else Direction.SHORT
     analysis = EvidenceFusion().evaluate(
@@ -62,9 +74,15 @@ def _forming_observation(snapshot: MarketSnapshot) -> Opportunity:
             Evidence(code="market_health", text="公开行情、盘口与成交数据健康", weight=12),
             Evidence(
                 code="market_structure",
-                text=f"{structure}，等待多周期结构与触发共振",
+                text=f"{structure}",
                 weight=10,
                 value=flow,
+            ),
+            Evidence(
+                code="derivatives_live",
+                text=f"OI {oi * Decimal('100'):+.2f}% · 资金费率 {funding:+.4f}% · $1k 滑点 {slippage:.2f} bps",
+                weight=8,
+                value=oi,
             ),
         ),
         data_health=snapshot.data_health,
@@ -200,8 +218,20 @@ class LiveMarketScanner:
                 snapshots.append(snapshot)
                 self.state.market_health_registry.record_success(snapshot)
         if not snapshots:
+            wallet_candidates: list[SmartMoneyCandidate] = []
+            if self.wallet_tracker is not None:
+                try:
+                    wallet_candidates = self._wallet_candidates(
+                        await self.wallet_tracker.observe(),
+                        datetime.now(tz=UTC),
+                    )
+                except Exception:
+                    # Public wallet intelligence has a separate availability
+                    # boundary from CEX candles. Preserve it when the market
+                    # feeds are down, but never fabricate a value on failure.
+                    pass
             self.state.opportunities = []
-            self.state.smart_money = []
+            self.state.smart_money = sorted(wallet_candidates, key=lambda item: item.score, reverse=True)
             self.state.market_candles = {}
             self.state.market_health = self.state.market_health_registry.overall
             self.state.mode = "live"

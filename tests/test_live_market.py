@@ -24,7 +24,9 @@ def _response(request: httpx.Request) -> httpx.Response:
     elif path.endswith("/recent-trade"):
         result = {"list": [{"side": "Buy", "size": "2000", "price": "100"}] * 8 + [{"side": "Sell", "size": "1", "price": "99.9"}] * 2}
     elif path.endswith("/open-interest"):
-        result = {"list": [{"openInterest": "1100"}, {"openInterest": "1000"}]}
+        result = {"list": [{"openInterest": "1100", "timestamp": "1700000300000"}, {"openInterest": "1000", "timestamp": "1700000000000"}]}
+    elif path.endswith("/funding/history"):
+        result = {"list": [{"fundingRate": "0.0001", "fundingRateTimestamp": "1700000000000"}]}
     else:
         raise AssertionError(path)
     return httpx.Response(200, json={"retCode": 0, "result": result}, request=request)
@@ -83,6 +85,15 @@ async def test_candles_falls_back_to_binance_when_bybit_kline_is_unavailable() -
         candles = await client.candles("BTCUSDT", "60", limit=300)
     assert [candle.close for candle in candles] == [Decimal("101"), Decimal("102")]
     assert candles[-1].timestamp - candles[0].timestamp == 3600
+
+
+@pytest.mark.asyncio
+async def test_live_market_exposes_timestamped_open_interest_and_funding_history() -> None:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_response), base_url="https://api.bybit.com") as http:
+        client = BybitCompositeMarketClient(client=http, include_peers=False)
+        history = await client.derivatives("BTCUSDT", "5", limit=50)
+    assert history["open_interest"][-1]["value"] == "1100"
+    assert history["funding"][-1]["value"] == "0.0001"
 
 
 @pytest.mark.asyncio

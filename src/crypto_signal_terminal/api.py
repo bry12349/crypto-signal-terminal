@@ -115,6 +115,17 @@ def create_app(
             raise HTTPException(status_code=503, detail="Live candle source is unavailable") from exc
         return [item.model_dump(mode="json") for item in values]
 
+    @app.get("/api/v1/markets/{symbol}/derivatives")
+    async def derivatives(symbol: str, interval: str = "5") -> dict:
+        if interval not in {"5", "15", "60", "240"}:
+            raise HTTPException(status_code=422, detail="Unsupported derivatives interval")
+        if runtime.market_provider is None or not hasattr(runtime.market_provider, "derivatives"):
+            raise HTTPException(status_code=503, detail="Live derivatives source is unavailable")
+        try:
+            return await runtime.market_provider.derivatives(symbol.upper(), interval, 200)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Live derivatives source is unavailable") from exc
+
     @app.get("/api/v1/cycle/btc")
     async def btc_cycle() -> dict:
         if runtime.cycle_height_provider is None:

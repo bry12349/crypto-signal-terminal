@@ -192,6 +192,30 @@ class BybitCompositeMarketClient:
             for row in rows
         )
 
+    async def derivatives(self, symbol: str, interval: str, limit: int = 200) -> dict[str, list[dict[str, int | str]]]:
+        """Return public, timestamped derivatives series for chart indicators."""
+        normalized = symbol.upper().replace("/", "").replace("-", "")
+        if interval not in {"5", "15", "60", "240"}:
+            raise ValueError("unsupported derivatives interval")
+        interval_time = {"5": "5min", "15": "5min", "60": "1h", "240": "4h"}[interval]
+        safe_limit = max(20, min(limit, 200))
+        oi, funding = await asyncio.gather(
+            self._get(self.client, "/v5/market/open-interest", category="linear", symbol=normalized, intervalTime=interval_time, limit=safe_limit),
+            self._get(self.client, "/v5/market/funding/history", category="linear", symbol=normalized, limit=safe_limit),
+        )
+        oi_rows = list(reversed(oi[0].get("list", [])))
+        funding_rows = list(reversed(funding[0].get("list", [])))
+        return {
+            "open_interest": [
+                {"time": int(row["timestamp"]) // 1000, "value": str(row["openInterest"])}
+                for row in oi_rows if row.get("timestamp") is not None and row.get("openInterest") is not None
+            ],
+            "funding": [
+                {"time": int(row["fundingRateTimestamp"]) // 1000, "value": str(row["fundingRate"])}
+                for row in funding_rows if row.get("fundingRateTimestamp") is not None and row.get("fundingRate") is not None
+            ],
+        }
+
     async def _okx_price_confirms(self, symbol: str, reference: Decimal) -> int:
         if not symbol.endswith("USDT") or reference <= 0:
             return 0

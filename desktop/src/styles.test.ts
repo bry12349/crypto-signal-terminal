@@ -11,4 +11,10 @@ describe("terminal layout", () => {
     expect(styles).toContain(".chart-shell { overflow: hidden; }");
     expect(styles).toMatch(/grid-template-rows:\s*74px 36px minmax\(0,\s*1fr\) auto;/);
   });
+
+  it("defines distinct low-glare palettes for dark, Bitget dark, and paper themes", () => {
+    expect(styles).toContain(':root[data-theme="bitget"] { --accent: #2f8cff; --surface: #111a2b;');
+    expect(styles).toContain(':root[data-theme="paper"] {');
+    expect(styles).not.toContain(':root[data-theme="light"]');
+  });
 });

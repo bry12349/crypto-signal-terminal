@@ -89,6 +89,14 @@ describe("SignalCanvas", () => {
     expect(screen.getAllByLabelText("副图指标").at(-1)).toBeVisible();
   });
 
+  it("offers derivatives-focused CVD, open-interest, and funding indicators", () => {
+    render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[]} health={undefined} />);
+    const secondary = screen.getAllByLabelText("副图指标").at(-1)!;
+    expect(secondary).toHaveTextContent("CVD（成交方向代理）");
+    expect(secondary).toHaveTextContent("OI");
+    expect(secondary).toHaveTextContent("资金费率");
+  });
+
   it("marks the clicked chart timeframe as selected", () => {
     render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[]} health={undefined} />);
     const hour = screen.getAllByRole("button", { name: "1h" }).at(-1)!;

@@ -35,6 +35,19 @@ def test_candle_endpoint_requests_the_selected_exchange_interval() -> None:
     assert response.json()[0]["timestamp"] == 1_700_000_000
 
 
+def test_derivatives_endpoint_exposes_real_open_interest_and_funding_series() -> None:
+    class Market:
+        async def derivatives(self, symbol: str, interval: str, limit: int):
+            assert (symbol, interval, limit) == ("BTCUSDT", "60", 200)
+            return {"open_interest": [{"time": 1_700_000_000, "value": "123"}], "funding": [{"time": 1_700_000_000, "value": "0.0001"}]}
+
+    state = build_live_state()
+    state.market_provider = Market()
+    response = TestClient(create_app(state)).get("/api/v1/markets/BTCUSDT/derivatives", params={"interval": "60"})
+    assert response.status_code == 200
+    assert response.json()["open_interest"][0]["value"] == "123"
+
+
 def test_cycle_endpoint_returns_a_conclusion_from_live_block_height() -> None:
     class Height:
         async def tip_height(self) -> int:

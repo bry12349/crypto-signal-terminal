@@ -77,7 +77,7 @@ function vwapData(bars: ChartBar[]) {
   });
 }
 
-function MiniChart({ selected, candles, timeframe, primary, secondary, derivatives }: { selected: Opportunity; candles: Candle[]; timeframe: Timeframe; primary: PrimaryIndicator; secondary: SecondaryIndicator; derivatives: DerivativesHistory | null }) {
+function MiniChart({ selected, marketSymbol, candles, timeframe, primary, secondary, derivatives }: { selected: Opportunity; marketSymbol: string; candles: Candle[]; timeframe: Timeframe; primary: PrimaryIndicator; secondary: SecondaryIndicator; derivatives: DerivativesHistory | null }) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
   const candle = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -120,10 +120,10 @@ function MiniChart({ selected, candles, timeframe, primary, secondary, derivativ
     // full series is essential: an incremental update only changes the last
     // candle and would leave the previous timeframe visible.
     candle.current?.setData(data.map(({ volume: _volume, ...bar }) => ({ ...bar, time: bar.time as UTCTimestamp })));
-    const nextViewKey = `${selected.symbol}:${timeframe}`;
+    const nextViewKey = `${marketSymbol}:${timeframe}`;
     if (viewKey.current !== nextViewKey) { viewKey.current = nextViewKey; chart.current?.timeScale().fitContent(); }
     chart.current?.timeScale().scrollToRealTime();
-  }, [data, selected.symbol, timeframe]);
+  }, [data, marketSymbol, timeframe]);
 
   useEffect(() => {
     if (!chart.current) return;
@@ -183,6 +183,7 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
   const [derivatives, setDerivatives] = useState<DerivativesHistory | null>(null);
   const [periodLoading, setPeriodLoading] = useState(false);
   const [appearanceVersion, setAppearanceVersion] = useState(0);
+  const marketSymbol = selected?.market_symbol ?? selected?.symbol ?? "BTCUSDT";
   useEffect(() => { const refresh = () => setAppearanceVersion((value) => value + 1); window.addEventListener("appearance-change", refresh); return () => window.removeEventListener("appearance-change", refresh); }, []);
   useEffect(() => {
     if (!selected || mode !== "live") return;
@@ -195,25 +196,26 @@ export function SignalCanvas({ selected, candles, mode, health }: { selected: Op
     setDerivatives(null);
     setPeriodLoading(true);
     const refresh = () => {
-      fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(selected.symbol)}/candles?interval=${interval}`, { signal: abort.signal })
+      fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(marketSymbol)}/candles?interval=${interval}`, { signal: abort.signal })
         .then((response) => response.ok ? response.json() as Promise<Candle[]> : Promise.reject(new Error("candle source unavailable")))
         .then((values) => { if (!abort.signal.aborted) setPeriodCandles(values); })
         .catch(() => { if (!abort.signal.aborted) setPeriodCandles(timeframe === "5m" ? candles : []); })
         .finally(() => { if (!abort.signal.aborted) setPeriodLoading(false); });
     };
     refresh();
-    fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(selected.symbol)}/derivatives?interval=${interval}`, { signal: abort.signal })
+    fetch(`http://127.0.0.1:8765/api/v1/markets/${encodeURIComponent(marketSymbol)}/derivatives?interval=${interval}`, { signal: abort.signal })
       .then((response) => response.ok ? response.json() as Promise<DerivativesHistory> : Promise.reject(new Error("derivatives source unavailable")))
       .then((values) => { if (!abort.signal.aborted) setDerivatives(values); })
       .catch(() => { if (!abort.signal.aborted) setDerivatives(null); });
     const poll = window.setInterval(refresh, 5000);
     return () => { abort.abort(); window.clearInterval(poll); };
-  }, [mode, selected?.symbol, timeframe]);
+  }, [marketSymbol, mode, selected?.id, timeframe]);
   if (!selected) return <main className="signal-canvas empty-canvas"><Crosshair size={26} /><h2>当前无可执行机会</h2><p>只有满足触发、流动性与风控条件的结构才会出现在这里。</p></main>;
-  const direction = selected.order_plan?.direction; const base = selected.symbol.replace("USDT", "");
+  const direction = selected.order_plan?.direction; const base = marketSymbol.replace("USDT", "");
+  const isWalletFlow = selected.source === "SMART_MONEY" && Boolean(selected.source_label);
   const healthLabel = health?.status === "healthy" ? `${base} 行情健康` : health?.status === "degraded" ? `${base} 行情降级` : health?.status === "unavailable" ? `${base} 行情不可用` : `${base} 行情待确认`;
   return <main className="signal-canvas"><div className="instrument-head"><div><span className="eyebrow">SELECTED INSTRUMENT · UTC+8</span><h1>{base}<small> / USDT PERP</small></h1></div><div className={`direction-lock ${direction?.toLowerCase() ?? "watch"}`}><span>{direction ?? "NO TRADE"}</span><strong>{selected.confidence}</strong><small>{selected.state === "FORMING" ? "观察强度" : "结构可信度"}</small></div></div>
     <div className="setup-ribbon"><span><Layers3 size={14} />{selected.title}</span><span><Clock3 size={14} />{selected.state === "ENTRY_VALID" ? "有效窗口开启" : "等待触发"}</span><span className={`data-fresh ${health?.status === "healthy" ? "" : "unhealthy"}`}>{health?.status === "healthy" ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}{healthLabel}</span></div>
-    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button type="button" key={item.label} aria-pressed={timeframe === item.label} className={timeframe === item.label ? "active" : ""} onPointerDown={(event) => event.stopPropagation()} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="EMA26">EMA26</option><option value="VWAP">VWAP</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option><option value="CVD">CVD（成交方向代理）</option><option value="OI">OI</option><option value="FUNDING">资金费率</option></select></label></div>{mode === "live" && (periodCandles ?? candles).length ? <MiniChart key={appearanceVersion} selected={selected} candles={periodCandles ?? candles} timeframe={timeframe} primary={primary} secondary={secondary} derivatives={derivatives} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>{periodLoading && candles.length ? `正在加载 ${timeframe} 实时 K 线` : "暂无可验证的实时 K 线"}</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && (periodCandles ?? candles).length ? `${timeframe} · PUBLIC FUTURES · UTC+8` : "NO MARKET DATA"}</div></div>
-    <section className="evidence-panel"><AnalysisStrip selected={selected} /><div className="section-title"><div><span className="eyebrow">WHY NOW</span><h3>核心证据</h3></div></div><div className="evidence-grid">{selected.evidence.slice(0, 3).map((item, index) => <article key={item.code}><span>0{index + 1}</span><div><strong>{item.text}</strong><small>{item.value ? `实时值 ${item.value}` : "多源数据已确认"}</small></div><CheckCircle2 size={17} /></article>)}</div>{selected.risk && <div className="risk-line"><AlertTriangle size={15} /><strong>主要风险</strong><span>{selected.risk}</span></div>}</section></main>;
+    <div className="chart-shell"><div className="chart-toolbar"><div className="timeframe-group" aria-label="K线周期">{TIMEFRAMES.map((item) => <button type="button" key={item.label} aria-pressed={timeframe === item.label} className={timeframe === item.label ? "active" : ""} onPointerDown={(event) => event.stopPropagation()} onClick={() => setTimeframe(item.label)}>{item.label}</button>)}</div><label>主图指标<select aria-label="主图指标" value={primary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setPrimary(event.target.value as PrimaryIndicator)}><option value="NONE">无</option><option value="MA">MA20</option><option value="EMA">EMA12</option><option value="EMA26">EMA26</option><option value="VWAP">VWAP</option><option value="BOLL">BOLL20</option></select></label><label>副图指标<select aria-label="副图指标" value={secondary} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setSecondary(event.target.value as SecondaryIndicator)}><option value="VOLUME">VOL</option><option value="RSI">RSI14</option><option value="MACD">MACD</option><option value="CVD">CVD（成交方向代理）</option><option value="OI">OI</option><option value="FUNDING">资金费率</option></select></label></div>{mode === "live" && (periodCandles ?? candles).length ? <MiniChart key={appearanceVersion} selected={selected} marketSymbol={marketSymbol} candles={periodCandles ?? candles} timeframe={timeframe} primary={primary} secondary={secondary} derivatives={derivatives} /> : <div className="chart-unavailable"><AlertTriangle size={20} /><strong>{periodLoading && candles.length ? `正在加载 ${timeframe} 实时 K 线` : "暂无可验证的实时 K 线"}</strong><span>不会用模拟走势替代真实行情</span></div>}<div className="chart-watermark">{mode === "live" && (periodCandles ?? candles).length ? `${timeframe} · PUBLIC FUTURES · UTC+8` : "NO MARKET DATA"}</div></div>
+    <section className="evidence-panel">{isWalletFlow && <div className="wallet-flow-summary"><div><span className="eyebrow">ON-CHAIN SMART MONEY</span><h3>钱包流向详情</h3></div><span className="wallet-market-benchmark">市场基准 · {base}/USDT</span><p>{selected.source_label}</p><small>当前 K 线仅用于市场环境确认；钱包活动不等同于中心化交易所的合约开仓。</small></div>}<AnalysisStrip selected={selected} /><div className="section-title"><div><span className="eyebrow">WHY NOW</span><h3>核心证据</h3></div></div><div className="evidence-grid">{selected.evidence.slice(0, 3).map((item, index) => <article key={item.code}><span>0{index + 1}</span><div><strong>{item.text}</strong><small>{item.value ? `实时值 ${item.value}` : "多源数据已确认"}</small></div><CheckCircle2 size={17} /></article>)}</div>{selected.risk && <div className="risk-line"><AlertTriangle size={15} /><strong>主要风险</strong><span>{selected.risk}</span></div>}</section></main>;
 }

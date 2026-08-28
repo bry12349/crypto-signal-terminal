@@ -10,7 +10,7 @@ describe("mergeSignalPaths", () => {
       candles: {},
       smart_money: [{
         id: "onchain-wallet:0xabc:1",
-        symbol: "SOL",
+        symbol: "ONCHAIN",
         kind: "ONCHAIN_CLUSTER",
         direction: "LONG",
         score: 84,
@@ -23,5 +23,6 @@ describe("mergeSignalPaths", () => {
 
     expect(opportunities[0].title).toBe("公开钱包追踪")
     expect(opportunities[0].risk).toContain("不等同于 CEX 开仓")
+    expect(opportunities[0].market_symbol).toBe("BTCUSDT")
   });
 });

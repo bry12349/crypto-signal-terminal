@@ -46,8 +46,8 @@ export default function App() {
         <SignalCanvas
           selected={selected}
           mode={snapshot.mode}
-          candles={selected ? snapshot.candles?.[selected.symbol] ?? [] : []}
-          health={selected ? health.market_detail.symbols[selected.symbol] : undefined}
+          candles={selected ? snapshot.candles?.[selected.market_symbol ?? selected.symbol] ?? [] : []}
+          health={selected ? health.market_detail.symbols[selected.market_symbol ?? selected.symbol] : undefined}
         />
         <OrderTicket opportunity={selected} />
       </div>

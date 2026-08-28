@@ -65,6 +65,7 @@ button { font: inherit; }
 .analysis-strip small, .analysis-strip strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .analysis-strip small { color: #718095; font: 8px "IBM Plex Mono", monospace; }
 .analysis-strip strong { margin-top: 3px; color: #dce7f7; font: 600 10px "IBM Plex Mono", monospace; }
+.wallet-flow-summary { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; margin-bottom: 11px; padding: 9px 10px; border: 1px solid #245472; border-radius: 6px; background: linear-gradient(90deg, rgba(33, 92, 123, .20), rgba(16, 24, 35, .52)); }.wallet-flow-summary h3 { margin: 2px 0 0; color: #cbeaff; font-size: 13px; }.wallet-flow-summary p { margin: 0; color: #9eb4c9; font: 10px "IBM Plex Mono", monospace; }.wallet-flow-summary small { grid-column: 1 / -1; color: #718da6; font-size: 9px; }.wallet-market-benchmark { align-self: center; color: #64b5ef; font: 9px "IBM Plex Mono", monospace; }
 .analysis-biases { grid-column: 1 / -1; display: flex; gap: 9px; overflow: hidden; color: #8494a9; font: 8px "IBM Plex Mono", monospace; white-space: nowrap; }
 .analysis-biases span:last-child { color: #d69a65; }
 @media (max-width: 1180px) { .analysis-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

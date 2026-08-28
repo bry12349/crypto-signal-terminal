@@ -58,6 +58,7 @@ export interface Opportunity {
   title: string | null;
   risk: string | null;
   source_label: string | null;
+  market_symbol?: string | null;
   updated_at: string;
   evidence: Evidence[];
   order_plan: OrderPlan | null;

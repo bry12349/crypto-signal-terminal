@@ -74,6 +74,18 @@ describe("SignalCanvas", () => {
     expect(screen.getByText("实时市场观察 · 等待触发")).toBeVisible();
   });
 
+  it("gives an on-chain wallet card an explicit flow detail and market benchmark", () => {
+    render(<SignalCanvas
+      selected={{ ...demoSnapshot.opportunities[0], source: "SMART_MONEY", symbol: "ONCHAIN", market_symbol: "BTCUSDT", title: "公开钱包追踪", source_label: "BSC · Binance Web3 公开钱包", evidence: [{ code: "wallet", text: "钱包 0xabc 出现新的链上活动", weight: 18, value: null, source: "binance" }] }}
+      mode="live"
+      candles={[]}
+      health={undefined}
+    />);
+    expect(screen.getByText("钱包流向详情")).toBeVisible();
+    expect(screen.getByText("市场基准 · BTC/USDT")).toBeVisible();
+    expect(screen.getByText("BSC · Binance Web3 公开钱包")).toBeVisible();
+  });
+
   it("surfaces unavailable news as an explicit bias instead of fabricating it", () => {
     render(<SignalCanvas selected={{ ...demoSnapshot.opportunities[0], analysis: {
       opportunity_score: 70, confidence: 72, p_tp_before_sl: "0.62", expected_value: "0.11", evidence_conflict: "0.14", is_tradeable: true,

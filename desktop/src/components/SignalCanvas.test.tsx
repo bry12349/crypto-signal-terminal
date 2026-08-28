@@ -95,6 +95,7 @@ describe("SignalCanvas", () => {
       health={undefined}
     />);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/api/v1/onchain/bsc/0xtoken/candles?interval=5"), expect.anything()));
+    expect(screen.getByText("链上池 · MEMESTOCK / BSC")).toBeVisible();
   });
 
   it("surfaces unavailable news as an explicit bias instead of fabricating it", () => {

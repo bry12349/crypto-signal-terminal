@@ -25,4 +25,18 @@ describe("mergeSignalPaths", () => {
     expect(opportunities[0].risk).toContain("不等同于 CEX 开仓")
     expect(opportunities[0].market_symbol).toBe("BTCUSDT")
   });
+
+  it("uses BTC as the chart benchmark when a wallet token has no verified perpetual market", () => {
+    const opportunities = mergeSignalPaths({
+      mode: "live",
+      opportunities: [],
+      candles: { BTCUSDT: [], ETHUSDT: [] },
+      smart_money: [{
+        id: "onchain-wallet:0xmemestock:1", symbol: "MEMESTOCK", kind: "ONCHAIN_CLUSTER", direction: "LONG", score: 88,
+        observed_at: "2026-08-29T00:00:00Z", wallet: "0xmemestock", chain: "BSC · Binance Web3 公开钱包", evidence: [],
+      }],
+    });
+
+    expect(opportunities[0].market_symbol).toBe("BTCUSDT");
+  });
 });

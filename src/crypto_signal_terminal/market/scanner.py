@@ -113,6 +113,7 @@ class LiveMarketScanner:
         self.max_concurrency = max(1, max_concurrency)
         self.audit_store = audit_store
         self.wallet_tracker = wallet_tracker
+        self._wallet_roster: list[SmartMoneyCandidate] = []
         self._active_strategy_ids: set[str] = set()
         self.trend = TrendEngine()
         self.altcoin = AltcoinEngine()
@@ -188,6 +189,21 @@ class LiveMarketScanner:
             ))
         return candidates
 
+    async def _current_wallet_roster(self, observed_at: datetime) -> list[SmartMoneyCandidate]:
+        if self.wallet_tracker is None:
+            return self._wallet_roster
+        try:
+            flows = await self.wallet_tracker.observe()
+            # An empty result during the tracker's rate-limit/cache window
+            # means "no new event", not "all tracked wallets disappeared".
+            if flows:
+                self._wallet_roster = self._wallet_candidates(flows, observed_at)
+        except Exception:
+            # Retain the last verified roster when the optional public source
+            # is temporarily unavailable.
+            pass
+        return self._wallet_roster
+
     async def scan_once(self) -> int:
         if self.universe is not None:
             try:
@@ -218,18 +234,7 @@ class LiveMarketScanner:
                 snapshots.append(snapshot)
                 self.state.market_health_registry.record_success(snapshot)
         if not snapshots:
-            wallet_candidates: list[SmartMoneyCandidate] = []
-            if self.wallet_tracker is not None:
-                try:
-                    wallet_candidates = self._wallet_candidates(
-                        await self.wallet_tracker.observe(),
-                        datetime.now(tz=UTC),
-                    )
-                except Exception:
-                    # Public wallet intelligence has a separate availability
-                    # boundary from CEX candles. Preserve it when the market
-                    # feeds are down, but never fabricate a value on failure.
-                    pass
+            wallet_candidates = await self._current_wallet_roster(datetime.now(tz=UTC))
             self.state.opportunities = []
             self.state.smart_money = sorted(wallet_candidates, key=lambda item: item.score, reverse=True)
             self.state.market_candles = {}
@@ -250,14 +255,7 @@ class LiveMarketScanner:
                 opportunities.append(_forming_observation(snapshot))
             if candidate:
                 smart_money.append(candidate)
-        if self.wallet_tracker is not None:
-            try:
-                flows = await self.wallet_tracker.observe()
-                smart_money.extend(self._wallet_candidates(flows, max(item.observed_at for item in snapshots)))
-            except Exception:
-                # Wallet intelligence is additive and may be temporarily
-                # unavailable without compromising price/signal rendering.
-                pass
+        smart_money.extend(await self._current_wallet_roster(max(item.observed_at for item in snapshots)))
         self.state.opportunities = sorted(opportunities, key=lambda item: item.confidence, reverse=True)
         self._record_new_signals(self.state.opportunities)
         self.state.smart_money = sorted(smart_money, key=lambda item: item.score, reverse=True)

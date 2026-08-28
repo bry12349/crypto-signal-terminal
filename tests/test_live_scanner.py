@@ -111,6 +111,31 @@ async def test_wallet_tracking_survives_when_all_cex_market_snapshots_fail() -> 
     assert state.opportunities == []
 
 
+async def test_wallet_roster_is_not_cleared_during_tracker_cache_interval() -> None:
+    class Market:
+        async def snapshot(self, symbol: str):
+            return _market(symbol, "67000", trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1)
+
+    class WalletTracker:
+        calls = 0
+
+        async def observe(self):
+            self.calls += 1
+            if self.calls > 1:
+                return ()
+            return (OnchainWalletFlow(
+                wallet="0xabc", label="链上高手", token_symbol="SOL", direction=Direction.LONG,
+                notional_delta=Decimal("500000"), score=84, is_baseline=True,
+            ),)
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT",), wallet_tracker=WalletTracker())
+    await scanner.scan_once()
+    await scanner.scan_once()
+
+    assert [item.wallet for item in state.smart_money if item.wallet] == ["0xabc"]
+
+
 async def test_healthy_market_without_trigger_remains_visible_as_forming_observation() -> None:
     class Market:
         async def snapshot(self, symbol: str):

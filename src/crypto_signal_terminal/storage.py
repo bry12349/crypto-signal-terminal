@@ -87,7 +87,7 @@ class AuditStore:
         ).fetchall()
         return [SignalRecord.from_dict(json.loads(row["payload_json"])) for row in rows]
 
-    def calibration_state(self, *, signal_type: str | None = None, direction: Direction | None = None) -> dict:
+    def calibration_state(self, *, signal_type: str | None = None, direction: Direction | None = None, symbol: str | None = None) -> dict:
         records = self.signal_records(limit=10_000)
         settled = [
             record for record in records
@@ -95,6 +95,7 @@ class AuditStore:
             and record.predicted_probability is not None
             and (signal_type is None or record.signal_type == signal_type)
             and (direction is None or record.plan.direction == direction)
+            and (symbol is None or record.symbol == symbol)
         ]
         if settled:
             mean_predicted = sum((record.predicted_probability or Decimal("0") for record in settled), Decimal("0")) / len(settled)

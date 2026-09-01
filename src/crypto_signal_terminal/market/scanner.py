@@ -151,10 +151,10 @@ class LiveMarketScanner:
         self.smart = SmartMoneyEngine()
         self.state.market_health_registry.set_watchlist(watchlist)
 
-    def _calibration_state(self, signal_type: str, direction: Direction | None = None) -> CalibrationState:
+    def _calibration_state(self, signal_type: str, direction: Direction | None = None, symbol: str | None = None) -> CalibrationState:
         if self.audit_store is None:
             return CalibrationState(settled=0, mean_predicted=Decimal("0"), observed_win_rate=Decimal("0"), absolute_error=Decimal("0"), status="INSUFFICIENT")
-        return CalibrationState.model_validate(self.audit_store.calibration_state(signal_type=signal_type, direction=direction))
+        return CalibrationState.model_validate(self.audit_store.calibration_state(signal_type=signal_type, direction=direction, symbol=symbol))
 
     def _settle_recorded_signals(self, snapshots: list[MarketSnapshot]) -> None:
         if self.audit_store is None:
@@ -285,14 +285,14 @@ class LiveMarketScanner:
         for snapshot in snapshots:
             self.state.market_candles[snapshot.symbol] = [item.model_dump(mode="json") for item in snapshot.candles]
             if snapshot.symbol in {"BTCUSDT", "ETHUSDT"}:
-                opportunity = self.trend.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("trend_continuation", direction))
+                opportunity = self.trend.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("trend_continuation", direction, snapshot.symbol))
             else:
-                opportunity = self.altcoin.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("volatility_expansion", direction))
+                opportunity = self.altcoin.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("volatility_expansion", direction, snapshot.symbol))
             candidate = self.smart.evaluate_flow(snapshot)
             if opportunity:
                 opportunities.append(opportunity)
             else:
-                opportunities.append(_forming_observation(snapshot, calibration=self._calibration_state("market_observation")))
+                opportunities.append(_forming_observation(snapshot, calibration=self._calibration_state("market_observation", symbol=snapshot.symbol)))
             if candidate:
                 smart_money.append(candidate)
         smart_money.extend(await self._current_wallet_roster(max(item.observed_at for item in snapshots)))

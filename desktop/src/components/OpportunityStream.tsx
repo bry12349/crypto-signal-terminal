@@ -43,8 +43,9 @@ function compareSignalQuality(a: Opportunity, b: Opportunity) {
 export function OpportunityStream({ items, selectedId, onSelect }: { items: Opportunity[]; selectedId: string | null; onSelect: (id: string) => void }) {
   const [filter, setFilter] = useState<Filter>("全部");
   const sorted = useMemo(() => items.filter((item) => matchesFilter(item, filter)).sort(compareSignalQuality), [items, filter]);
+  const best = useMemo(() => [...items].sort(compareSignalQuality).find((item) => item.state === "ENTRY_VALID" && item.analysis?.is_tradeable), [items]);
   return <aside className="opportunity-rail">
-    <div className="rail-heading"><div><span className="eyebrow">LIVE RADAR</span><h2>机会流</h2></div><span className="count-badge">{sorted.length}</span></div>
+    <div className="rail-heading"><div><span className="eyebrow">LIVE RADAR</span><h2>机会流</h2></div><div className="rail-actions">{best && <button type="button" aria-label="查看最佳信号" onClick={() => { setFilter("全部"); onSelect(best.id); }}>最佳信号</button>}<span className="count-badge">{sorted.length}</span></div></div>
     <div className="filter-row">{filters.map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
     <div className="opportunity-list">
       {sorted.length === 0 && <div className="empty-state"><RadioTower size={22} /><strong>当前无可执行机会</strong><span>系统正在等待高质量结构</span></div>}

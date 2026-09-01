@@ -1,5 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { OpportunityStream } from "./OpportunityStream";
 import type { Opportunity } from "../types";
@@ -64,5 +64,18 @@ describe("OpportunityStream", () => {
     const view = render(<OpportunityStream items={[higherConfidence, higherEdge]} selectedId={null} onSelect={() => undefined} />);
 
     expect(within(view.container).getAllByTestId("opportunity")[0]).toHaveTextContent("BTC");
+  });
+
+  it("offers one click navigation to the best executable signal", () => {
+    const onSelect = vi.fn();
+    const best = { ...items[1], analysis: {
+      opportunity_score: 80, confidence: 80, p_tp_before_sl: "0.64", expected_value: "0.22", evidence_conflict: "0.10", is_tradeable: true,
+      market_regime: "TREND", signal_type: "trend_continuation", smart_money_bias: "UNAVAILABLE", derivatives_bias: "BULLISH", order_flow_bias: "BULLISH", news_bias: "UNAVAILABLE",
+    } };
+    const view = render(<OpportunityStream items={[best, items[0]]} selectedId={null} onSelect={onSelect} />);
+
+    fireEvent.click(within(view.container).getByRole("button", { name: "查看最佳信号" }));
+
+    expect(onSelect).toHaveBeenCalledWith("entry");
   });
 });

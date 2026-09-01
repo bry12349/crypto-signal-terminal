@@ -29,9 +29,20 @@ function matchesFilter(item: Opportunity, filter: Filter) {
   return item.source !== "SMART_MONEY" && item.symbol !== "BTCUSDT" && item.symbol !== "ETHUSDT";
 }
 
+function compareSignalQuality(a: Opportunity, b: Opportunity) {
+  const actionable = (item: Opportunity) => Number(item.state === "ENTRY_VALID" && item.order_plan !== null && item.analysis?.is_tradeable === true);
+  return actionable(b) - actionable(a)
+    || Number(b.analysis?.is_tradeable === true) - Number(a.analysis?.is_tradeable === true)
+    || priority[a.state] - priority[b.state]
+    || Number(b.analysis?.expected_value ?? -1) - Number(a.analysis?.expected_value ?? -1)
+    || Number(b.analysis?.p_tp_before_sl ?? 0) - Number(a.analysis?.p_tp_before_sl ?? 0)
+    || Number(b.analysis?.opportunity_score ?? 0) - Number(a.analysis?.opportunity_score ?? 0)
+    || b.confidence - a.confidence;
+}
+
 export function OpportunityStream({ items, selectedId, onSelect }: { items: Opportunity[]; selectedId: string | null; onSelect: (id: string) => void }) {
   const [filter, setFilter] = useState<Filter>("全部");
-  const sorted = useMemo(() => items.filter((item) => matchesFilter(item, filter)).sort((a, b) => priority[a.state] - priority[b.state] || b.confidence - a.confidence), [items, filter]);
+  const sorted = useMemo(() => items.filter((item) => matchesFilter(item, filter)).sort(compareSignalQuality), [items, filter]);
   return <aside className="opportunity-rail">
     <div className="rail-heading"><div><span className="eyebrow">LIVE RADAR</span><h2>机会流</h2></div><span className="count-badge">{sorted.length}</span></div>
     <div className="filter-row">{filters.map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>

@@ -38,6 +38,35 @@ DEFAULT_WATCHLIST = (
 )
 
 
+def rank_opportunities(opportunities: list[Opportunity]) -> list[Opportunity]:
+    """Rank executable edge before confidence-only observations."""
+    state_priority = {
+        LifecycleState.ENTRY_VALID: 3,
+        LifecycleState.TRIGGERED: 2,
+        LifecycleState.ARMED: 1,
+    }
+
+    def rank(item: Opportunity) -> tuple[int, int, int, Decimal, Decimal, int, int]:
+        analysis = item.analysis
+        actionable = bool(
+            item.state is LifecycleState.ENTRY_VALID
+            and item.order_plan is not None
+            and analysis is not None
+            and analysis.is_tradeable
+        )
+        return (
+            int(actionable),
+            int(bool(analysis and analysis.is_tradeable)),
+            state_priority.get(item.state, 0),
+            analysis.expected_value if analysis else Decimal("-1"),
+            analysis.p_tp_before_sl if analysis else Decimal("0"),
+            analysis.opportunity_score if analysis else 0,
+            item.confidence,
+        )
+
+    return sorted(opportunities, key=rank, reverse=True)
+
+
 def _forming_observation(snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None) -> Opportunity:
     """Keep a healthy market visible without pretending it is tradeable."""
     trend_1h = int(snapshot.features.get("trend_1h", 0))
@@ -267,7 +296,7 @@ class LiveMarketScanner:
             if candidate:
                 smart_money.append(candidate)
         smart_money.extend(await self._current_wallet_roster(max(item.observed_at for item in snapshots)))
-        self.state.opportunities = sorted(opportunities, key=lambda item: item.confidence, reverse=True)
+        self.state.opportunities = rank_opportunities(opportunities)
         self._record_new_signals(self.state.opportunities)
         self.state.smart_money = sorted(smart_money, key=lambda item: item.score, reverse=True)
         self.state.market_health = self.state.market_health_registry.overall

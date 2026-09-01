@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from crypto_signal_terminal.adapters.binance_web3 import OnchainWalletFlow
 from crypto_signal_terminal.domain.models import Candle, Direction, LifecycleState, SmartMoneyKind
-from crypto_signal_terminal.market.scanner import LiveMarketScanner
+from crypto_signal_terminal.market.scanner import LiveMarketScanner, rank_opportunities
 from crypto_signal_terminal.storage import AuditStore
 from crypto_signal_terminal.engines.signal_ledger import SignalOutcome, SignalRecord
 
@@ -33,6 +33,21 @@ async def test_scanner_refreshes_native_and_smart_money_opportunities() -> None:
     assert state.mode == "live"
     assert {item.symbol for item in state.opportunities} == {"BTCUSDT", "SOLUSDT"}
     assert state.smart_money[0].symbol == "SOLUSDT"
+
+
+def test_ranking_places_an_actionable_positive_expectancy_signal_before_a_higher_confidence_watch_item() -> None:
+    actionable = next(item for item in build_demo_state().opportunities if item.order_plan is not None)
+    watch_only = actionable.model_copy(update={
+        "id": "watch-only",
+        "state": LifecycleState.ARMED,
+        "confidence": 99,
+        "order_plan": None,
+        "analysis": actionable.analysis.model_copy(update={"is_tradeable": False, "expected_value": Decimal("-0.1")}),
+    })
+
+    ranked = rank_opportunities([watch_only, actionable])
+
+    assert ranked[0].id == actionable.id
 
 
 async def test_partial_watchlist_failure_is_visible_as_degraded() -> None:

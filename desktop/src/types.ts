@@ -47,6 +47,13 @@ export interface SignalAnalysis {
   derivatives_bias: string;
   order_flow_bias: string;
   news_bias: string;
+  calibration?: {
+    settled: number;
+    mean_predicted: string;
+    observed_win_rate: string;
+    absolute_error: string;
+    status: "INSUFFICIENT" | "VALIDATED" | "DEGRADED";
+  };
   decision?: {
     outcome: "TRADE" | "NO_TRADE";
     gates: { key: string; label: string; passed: boolean; observed: string; required: string }[];

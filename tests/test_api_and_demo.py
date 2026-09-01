@@ -179,6 +179,13 @@ def test_performance_endpoint_reports_settled_signal_results(tmp_path) -> None:
     assert response.json()["wins"] == 1
     assert response.json()["win_rate"] == 1.0
     assert response.json()["calibration"] == [{"bucket": "0.6-0.7", "count": 1, "predicted": 0.68, "observed": 1.0}]
+    assert response.json()["calibration_state"] == {
+        "settled": 1,
+        "mean_predicted": 0.68,
+        "observed_win_rate": 1.0,
+        "absolute_error": 0.32,
+        "status": "INSUFFICIENT",
+    }
 
 
 def test_audit_store_removes_retired_message_tables(tmp_path) -> None:

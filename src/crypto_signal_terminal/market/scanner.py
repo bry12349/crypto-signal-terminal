@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 from crypto_signal_terminal.domain.models import (
+    CalibrationState,
     Direction,
     Evidence,
     LifecycleState,
@@ -37,7 +38,7 @@ DEFAULT_WATCHLIST = (
 )
 
 
-def _forming_observation(snapshot: MarketSnapshot) -> Opportunity:
+def _forming_observation(snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None) -> Opportunity:
     """Keep a healthy market visible without pretending it is tradeable."""
     trend_1h = int(snapshot.features.get("trend_1h", 0))
     flow = Decimal(str(snapshot.features.get("aggressive_flow_imbalance", "0")))
@@ -61,6 +62,7 @@ def _forming_observation(snapshot: MarketSnapshot) -> Opportunity:
         direction=direction,
         reward_to_risk=Decimal("1"),
         signal_type="market_observation",
+        calibration=calibration,
     )
     return Opportunity(
         id=f"observe:{snapshot.symbol}",
@@ -119,6 +121,11 @@ class LiveMarketScanner:
         self.altcoin = AltcoinEngine()
         self.smart = SmartMoneyEngine()
         self.state.market_health_registry.set_watchlist(watchlist)
+
+    def _calibration_state(self) -> CalibrationState:
+        if self.audit_store is None:
+            return CalibrationState(settled=0, mean_predicted=Decimal("0"), observed_win_rate=Decimal("0"), absolute_error=Decimal("0"), status="INSUFFICIENT")
+        return CalibrationState.model_validate(self.audit_store.signal_performance()["calibration_state"])
 
     def _settle_recorded_signals(self, snapshots: list[MarketSnapshot]) -> None:
         if self.audit_store is None:
@@ -244,16 +251,17 @@ class LiveMarketScanner:
             self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
             return 0
         self._settle_recorded_signals(snapshots)
+        calibration = self._calibration_state()
         opportunities = []
         smart_money = []
         for snapshot in snapshots:
             self.state.market_candles[snapshot.symbol] = [item.model_dump(mode="json") for item in snapshot.candles]
-            opportunity = self.trend.evaluate(snapshot) if snapshot.symbol in {"BTCUSDT", "ETHUSDT"} else self.altcoin.evaluate(snapshot)
+            opportunity = self.trend.evaluate(snapshot, calibration=calibration) if snapshot.symbol in {"BTCUSDT", "ETHUSDT"} else self.altcoin.evaluate(snapshot, calibration=calibration)
             candidate = self.smart.evaluate_flow(snapshot)
             if opportunity:
                 opportunities.append(opportunity)
             else:
-                opportunities.append(_forming_observation(snapshot))
+                opportunities.append(_forming_observation(snapshot, calibration=calibration))
             if candidate:
                 smart_money.append(candidate)
         smart_money.extend(await self._current_wallet_roster(max(item.observed_at for item in snapshots)))

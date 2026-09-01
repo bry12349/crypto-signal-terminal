@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from crypto_signal_terminal.domain.models import DataHealth, Direction, MarketSnapshot
+from crypto_signal_terminal.domain.models import CalibrationState, DataHealth, Direction, MarketSnapshot
 from crypto_signal_terminal.engines.evidence_fusion import EvidenceFusion
 
 
@@ -62,3 +62,25 @@ def test_fusion_rejects_conflicting_low_edge_setup() -> None:
     assert analysis.expected_value <= 0
     assert analysis.decision.outcome == "NO_TRADE"
     assert any(gate.key == "expected_value" and not gate.passed for gate in analysis.decision.gates)
+
+
+def test_fusion_blocks_trade_when_a_sufficient_history_shows_the_model_is_miscalibrated() -> None:
+    analysis = EvidenceFusion().evaluate(
+        market(
+            trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1,
+            aggressive_flow_imbalance="0.72", depth_imbalance="0.44",
+            flow_persistence="0.92", oi_change_ratio="0.07",
+            volume_acceleration="2.2", atr_percentile="18", price_impact_bps="14",
+        ),
+        direction=Direction.LONG,
+        reward_to_risk=Decimal("1.8"),
+        signal_type="trend_continuation",
+        calibration=CalibrationState(
+            settled=30, mean_predicted=Decimal("0.68"), observed_win_rate=Decimal("0.48"),
+            absolute_error=Decimal("0.20"), status="DEGRADED",
+        ),
+    )
+
+    assert analysis.is_tradeable is False
+    assert analysis.decision.outcome == "NO_TRADE"
+    assert any(gate.key == "historical_calibration" and not gate.passed for gate in analysis.decision.gates)

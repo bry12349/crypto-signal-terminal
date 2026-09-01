@@ -114,6 +114,14 @@ class OrderPlan(FrozenModel):
         return self
 
 
+class CalibrationState(FrozenModel):
+    settled: int = Field(ge=0)
+    mean_predicted: Decimal = Field(ge=0, le=1)
+    observed_win_rate: Decimal = Field(ge=0, le=1)
+    absolute_error: Decimal = Field(ge=0, le=1)
+    status: Literal["INSUFFICIENT", "VALIDATED", "DEGRADED"]
+
+
 class SignalAnalysis(FrozenModel):
     opportunity_score: int = Field(ge=0, le=100)
     confidence: int = Field(ge=0, le=100)
@@ -127,6 +135,7 @@ class SignalAnalysis(FrozenModel):
     derivatives_bias: str
     order_flow_bias: str
     news_bias: str
+    calibration: CalibrationState
     decision: SignalDecision
 
 

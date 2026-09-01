@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from crypto_signal_terminal.domain.models import (
+    CalibrationState,
     Direction,
     Evidence,
     LifecycleState,
@@ -23,7 +24,7 @@ class TrendEngine:
     def __init__(self) -> None:
         self.fusion = EvidenceFusion()
 
-    def evaluate(self, snapshot: MarketSnapshot) -> Opportunity | None:
+    def evaluate(self, snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None) -> Opportunity | None:
         if not snapshot.data_health.healthy or snapshot.symbol not in {"BTCUSDT", "ETHUSDT"}:
             return None
         trend_4h = int(snapshot.features.get("trend_4h", 0))
@@ -57,6 +58,7 @@ class TrendEngine:
             direction=direction,
             reward_to_risk=candidate_plan.reward_to_risk,
             signal_type="trend_continuation",
+            calibration=calibration,
         )
         evidence = evidence + (
             Evidence(code="tp_before_sl", text="模型估计 TP 先于 SL 的概率", weight=16, value=analysis.p_tp_before_sl),

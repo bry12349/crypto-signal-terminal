@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from crypto_signal_terminal.domain.models import DecisionGate, Direction, MarketSnapshot, SignalAnalysis, SignalDecision
+from crypto_signal_terminal.domain.models import CalibrationState, DecisionGate, Direction, MarketSnapshot, SignalAnalysis, SignalDecision
 
 
 ZERO = Decimal("0")
@@ -39,6 +39,7 @@ class EvidenceFusion:
         direction: Direction,
         reward_to_risk: Decimal,
         signal_type: str,
+        calibration: CalibrationState | None = None,
     ) -> SignalAnalysis:
         trend = self._trend(snapshot)
         flow = self._flow(snapshot)
@@ -59,6 +60,18 @@ class EvidenceFusion:
         alignment = lead / total if total else ZERO
         probability = _clip(Decimal("0.32") + alignment * Decimal("0.52") - conflict * Decimal("0.18"))
         expected_value = (probability * reward_to_risk) - (ONE - probability) - Decimal("0.08")
+        calibration = calibration or CalibrationState(
+            settled=0,
+            mean_predicted=ZERO,
+            observed_win_rate=ZERO,
+            absolute_error=ZERO,
+            status="INSUFFICIENT",
+        )
+        calibration_label = {
+            "INSUFFICIENT": "历史校准：样本不足（不宣称胜率）",
+            "VALIDATED": "历史校准：已通过",
+            "DEGRADED": "历史校准：偏差超限",
+        }[calibration.status]
         gates = (
             DecisionGate(key="tp_before_sl", label="TP 先于 SL 概率", passed=probability >= Decimal("0.56"), observed=probability, required=Decimal("0.56")),
             DecisionGate(key="expected_value", label="净期望值", passed=expected_value > ZERO, observed=expected_value, required=ZERO),
@@ -66,6 +79,7 @@ class EvidenceFusion:
             DecisionGate(key="evidence_conflict", label="证据冲突上限", passed=conflict < Decimal("0.30"), observed=conflict, required=Decimal("0.30")),
             DecisionGate(key="confidence", label="结构置信度", passed=confidence >= 62, observed=Decimal(confidence), required=Decimal("62")),
             DecisionGate(key="cross_exchange", label="跨交易所确认", passed=cross_exchange >= Decimal("0.5"), observed=cross_exchange, required=Decimal("0.5")),
+            DecisionGate(key="historical_calibration", label=calibration_label, passed=calibration.status != "DEGRADED", observed=calibration.absolute_error, required=Decimal("0.12")),
         )
         tradeable = all(gate.passed for gate in gates)
         directional_flow = flow * (ONE if direction is Direction.LONG else Decimal("-1"))
@@ -83,6 +97,7 @@ class EvidenceFusion:
             derivatives_bias=_bias(directional_derivatives),
             order_flow_bias=_bias(directional_flow),
             news_bias="UNAVAILABLE",
+            calibration=calibration,
             decision=SignalDecision(outcome="TRADE" if tradeable else "NO_TRADE", gates=gates),
         )
 

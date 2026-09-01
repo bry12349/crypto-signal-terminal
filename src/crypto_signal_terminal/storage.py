@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from decimal import Decimal
 from pathlib import Path
 
 from crypto_signal_terminal.engines.signal_ledger import SignalRecord
@@ -88,6 +89,7 @@ class AuditStore:
     def signal_performance(self) -> dict:
         records = self.signal_records(limit=10_000)
         settled = [record for record in records if record.outcome in {SignalOutcome.TP1, SignalOutcome.STOP}]
+        calibrated = [record for record in settled if record.predicted_probability is not None]
         wins = sum(record.outcome is SignalOutcome.TP1 for record in settled)
         buckets: dict[int, list[SignalRecord]] = {}
         for record in settled:
@@ -104,6 +106,14 @@ class AuditStore:
             }
             for bucket, items in sorted(buckets.items())
         ]
+        if calibrated:
+            mean_predicted = sum((record.predicted_probability or Decimal("0") for record in calibrated), Decimal("0")) / len(calibrated)
+            observed_win_rate = Decimal(sum(record.outcome is SignalOutcome.TP1 for record in calibrated)) / len(calibrated)
+        else:
+            mean_predicted = Decimal("0")
+            observed_win_rate = Decimal("0")
+        absolute_error = abs(mean_predicted - observed_win_rate)
+        status = "INSUFFICIENT" if len(calibrated) < 30 else ("VALIDATED" if absolute_error <= Decimal("0.12") else "DEGRADED")
         return {
             "total": len(records),
             "settled": len(settled),
@@ -113,6 +123,13 @@ class AuditStore:
             "unfilled": sum(record.outcome is SignalOutcome.EXPIRED_UNFILLED for record in records),
             "win_rate": wins / len(settled) if settled else 0.0,
             "calibration": calibration,
+            "calibration_state": {
+                "settled": len(calibrated),
+                "mean_predicted": float(mean_predicted),
+                "observed_win_rate": float(observed_win_rate),
+                "absolute_error": float(absolute_error),
+                "status": status,
+            },
         }
 
     def close(self) -> None:

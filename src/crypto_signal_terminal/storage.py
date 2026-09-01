@@ -99,16 +99,24 @@ class AuditStore:
         if settled:
             mean_predicted = sum((record.predicted_probability or Decimal("0") for record in settled), Decimal("0")) / len(settled)
             observed_win_rate = Decimal(sum(record.outcome is SignalOutcome.TP1 for record in settled)) / len(settled)
+            brier_score = sum((
+                ((record.predicted_probability or Decimal("0")) - Decimal(record.outcome is SignalOutcome.TP1)) ** 2
+                for record in settled
+            ), Decimal("0")) / len(settled)
         else:
             mean_predicted = Decimal("0")
             observed_win_rate = Decimal("0")
+            brier_score = Decimal("0")
         absolute_error = abs(mean_predicted - observed_win_rate)
-        status = "INSUFFICIENT" if len(settled) < 30 else ("VALIDATED" if absolute_error <= Decimal("0.12") else "DEGRADED")
+        status = "INSUFFICIENT" if len(settled) < 30 else (
+            "VALIDATED" if absolute_error <= Decimal("0.12") and brier_score <= Decimal("0.25") else "DEGRADED"
+        )
         return {
             "settled": len(settled),
             "mean_predicted": float(mean_predicted),
             "observed_win_rate": float(observed_win_rate),
             "absolute_error": float(absolute_error),
+            "brier_score": float(brier_score),
             "status": status,
         }
 

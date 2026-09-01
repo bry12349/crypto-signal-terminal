@@ -174,11 +174,12 @@ function AnalysisStrip({ selected }: { selected: Opportunity }) {
   if (!analysis) return null;
   const decision = analysis.decision;
   const passed = decision?.gates.filter((gate) => gate.passed).length ?? 0;
+  const brier = analysis.calibration?.brier_score === undefined ? null : Number(analysis.calibration.brier_score).toFixed(3);
   const calibrationText = analysis.calibration?.status === "VALIDATED"
-    ? `策略校准：已验证（${analysis.calibration.settled} 笔已结算）`
+    ? `策略校准：已验证（${analysis.calibration.settled} 笔已结算${brier ? `，Brier ${brier}` : ""}）`
     : analysis.calibration?.status === "DEGRADED"
-      ? `策略校准：偏差超限（${analysis.calibration.settled} 笔已结算）`
-      : analysis.calibration ? `策略校准：样本不足（${analysis.calibration.settled} 笔已结算，不宣称胜率）` : null;
+      ? `策略校准：偏差超限（${analysis.calibration.settled} 笔已结算${brier ? `，Brier ${brier}` : ""}）`
+      : analysis.calibration ? `策略校准：样本不足（${analysis.calibration.settled} 笔已结算${brier ? `，Brier ${brier}` : ""}，不宣称胜率）` : null;
   return <><div className="analysis-strip"><span><small>EDGE</small><strong>{analysis.opportunity_score}</strong></span><span><small>P(TP&gt;SL)</small><strong>{(Number(analysis.p_tp_before_sl) * 100).toFixed(1)}%</strong></span><span><small>EV</small><strong className={Number(analysis.expected_value) > 0 ? "positive" : "negative"}>{analysis.expected_value}</strong></span><span><small>{analysis.market_regime}</small><strong>{analysis.signal_type}</strong></span><div className="analysis-biases"><span>SMART {analysis.smart_money_bias}</span><span>DERIVATIVES {analysis.derivatives_bias}</span><span>FLOW {analysis.order_flow_bias}</span><span>NEWS {analysis.news_bias}</span></div></div>{decision && <div className={`decision-panel ${decision.outcome.toLowerCase()}`}><strong>{decision.outcome === "TRADE" ? "可交易" : "暂不交易"} · {passed}/{decision.gates.length} 门槛通过</strong><div>{decision.gates.map((gate) => <span key={gate.key} aria-label={gate.label} className={gate.passed ? "passed" : "blocked"}>{gate.passed ? "✓" : "×"} {gate.label}</span>)}</div>{calibrationText && <small className="calibration-note">{calibrationText}</small>}</div>}</>;
 }
 

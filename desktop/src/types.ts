@@ -52,6 +52,7 @@ export interface SignalAnalysis {
     mean_predicted: string;
     observed_win_rate: string;
     absolute_error: string;
+    brier_score?: string;
     status: "INSUFFICIENT" | "VALIDATED" | "DEGRADED";
   };
   decision?: {

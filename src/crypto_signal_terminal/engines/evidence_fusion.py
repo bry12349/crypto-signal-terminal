@@ -77,7 +77,7 @@ class EvidenceFusion:
         calibration_label = {
             "INSUFFICIENT": "历史校准：样本不足（不宣称胜率）",
             "VALIDATED": "历史校准：已通过",
-            "DEGRADED": "历史校准：偏差超限",
+            "DEGRADED": "历史校准：偏差或 Brier 超限",
         }[calibration.status]
         gates = (
             DecisionGate(key="tp_before_sl", label="TP 先于 SL 概率", passed=probability >= Decimal("0.56"), observed=probability, required=Decimal("0.56")),

@@ -184,8 +184,30 @@ def test_performance_endpoint_reports_settled_signal_results(tmp_path) -> None:
         "mean_predicted": 0.68,
         "observed_win_rate": 1.0,
         "absolute_error": 0.32,
+        "brier_score": 0.1024,
         "status": "INSUFFICIENT",
     }
+
+
+def test_calibration_degrades_when_individual_probabilities_are_wrong_despite_matching_averages(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    opportunity = next(item for item in build_demo_state().opportunities if item.order_plan is not None)
+    for index in range(30):
+        predicted = Decimal("0.90") if index < 15 else Decimal("0.10")
+        outcome = SignalOutcome.STOP if index < 15 else SignalOutcome.TP1
+        store.upsert_signal_record(SignalRecord(
+            signal_id=f"brier:{index}", symbol="BTCUSDT", plan=opportunity.order_plan,
+            generated_at=opportunity.created_at, predicted_probability=predicted,
+            signal_type="trend_continuation", outcome=outcome, settled_at=opportunity.updated_at,
+        ))
+
+    calibration = store.calibration_state(signal_type="trend_continuation", direction=opportunity.order_plan.direction)
+
+    assert calibration["mean_predicted"] == 0.5
+    assert calibration["observed_win_rate"] == 0.5
+    assert calibration["absolute_error"] == 0.0
+    assert calibration["brier_score"] == 0.81
+    assert calibration["status"] == "DEGRADED"
 
 
 def test_audit_store_removes_retired_message_tables(tmp_path) -> None:

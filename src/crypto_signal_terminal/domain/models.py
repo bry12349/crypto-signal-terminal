@@ -119,6 +119,7 @@ class CalibrationState(FrozenModel):
     mean_predicted: Decimal = Field(ge=0, le=1)
     observed_win_rate: Decimal = Field(ge=0, le=1)
     absolute_error: Decimal = Field(ge=0, le=1)
+    brier_score: Decimal = Field(default=Decimal("0"), ge=0, le=1)
     status: Literal["INSUFFICIENT", "VALIDATED", "DEGRADED"]
 
 

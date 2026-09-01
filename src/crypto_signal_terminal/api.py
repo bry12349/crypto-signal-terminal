@@ -204,7 +204,7 @@ def create_app(
     @app.get("/api/v1/performance")
     async def performance() -> dict:
         if audit_store is None:
-            return {"total": 0, "settled": 0, "wins": 0, "losses": 0, "ambiguous": 0, "unfilled": 0, "win_rate": 0.0, "calibration": [], "calibration_state": {"settled": 0, "mean_predicted": 0.0, "observed_win_rate": 0.0, "absolute_error": 0.0, "status": "INSUFFICIENT"}}
+            return {"total": 0, "settled": 0, "wins": 0, "losses": 0, "ambiguous": 0, "unfilled": 0, "win_rate": 0.0, "calibration": [], "calibration_state": {"settled": 0, "mean_predicted": 0.0, "observed_win_rate": 0.0, "absolute_error": 0.0, "brier_score": 0.0, "status": "INSUFFICIENT"}}
         return audit_store.signal_performance()
 
     @app.websocket("/api/v1/events")

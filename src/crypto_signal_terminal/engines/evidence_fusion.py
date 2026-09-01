@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from crypto_signal_terminal.domain.models import Direction, MarketSnapshot, SignalAnalysis
+from crypto_signal_terminal.domain.models import DecisionGate, Direction, MarketSnapshot, SignalAnalysis, SignalDecision
 
 
 ZERO = Decimal("0")
@@ -59,14 +59,15 @@ class EvidenceFusion:
         alignment = lead / total if total else ZERO
         probability = _clip(Decimal("0.32") + alignment * Decimal("0.52") - conflict * Decimal("0.18"))
         expected_value = (probability * reward_to_risk) - (ONE - probability) - Decimal("0.08")
-        tradeable = (
-            probability >= Decimal("0.56")
-            and expected_value > ZERO
-            and reward_to_risk >= Decimal("1.35")
-            and conflict < Decimal("0.30")
-            and confidence >= 62
-            and cross_exchange >= Decimal("0.5")
+        gates = (
+            DecisionGate(key="tp_before_sl", label="TP 先于 SL 概率", passed=probability >= Decimal("0.56"), observed=probability, required=Decimal("0.56")),
+            DecisionGate(key="expected_value", label="净期望值", passed=expected_value > ZERO, observed=expected_value, required=ZERO),
+            DecisionGate(key="reward_to_risk", label="盈亏比", passed=reward_to_risk >= Decimal("1.35"), observed=reward_to_risk, required=Decimal("1.35")),
+            DecisionGate(key="evidence_conflict", label="证据冲突上限", passed=conflict < Decimal("0.30"), observed=conflict, required=Decimal("0.30")),
+            DecisionGate(key="confidence", label="结构置信度", passed=confidence >= 62, observed=Decimal(confidence), required=Decimal("62")),
+            DecisionGate(key="cross_exchange", label="跨交易所确认", passed=cross_exchange >= Decimal("0.5"), observed=cross_exchange, required=Decimal("0.5")),
         )
+        tradeable = all(gate.passed for gate in gates)
         directional_flow = flow * (ONE if direction is Direction.LONG else Decimal("-1"))
         directional_derivatives = derivatives * (ONE if direction is Direction.LONG else Decimal("-1"))
         return SignalAnalysis(
@@ -82,6 +83,7 @@ class EvidenceFusion:
             derivatives_bias=_bias(directional_derivatives),
             order_flow_bias=_bias(directional_flow),
             news_bias="UNAVAILABLE",
+            decision=SignalDecision(outcome="TRADE" if tradeable else "NO_TRADE", gates=gates),
         )
 
     @staticmethod

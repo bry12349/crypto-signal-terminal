@@ -106,6 +106,19 @@ describe("SignalCanvas", () => {
     expect(screen.getByText("NEWS UNAVAILABLE")).toBeVisible();
   });
 
+  it("shows the auditable trade decision gates instead of a black-box score", () => {
+    render(<SignalCanvas selected={{ ...demoSnapshot.opportunities[0], analysis: {
+      opportunity_score: 70, confidence: 72, p_tp_before_sl: "0.62", expected_value: "0.11", evidence_conflict: "0.14", is_tradeable: true,
+      market_regime: "TREND", signal_type: "trend_continuation", smart_money_bias: "BULLISH", derivatives_bias: "BULLISH", order_flow_bias: "BULLISH", news_bias: "UNAVAILABLE",
+      decision: { outcome: "TRADE", gates: [
+        { key: "tp_before_sl", label: "TP 先于 SL 概率", passed: true, observed: "0.62", required: "0.56" },
+        { key: "expected_value", label: "净期望值", passed: true, observed: "0.11", required: "0" },
+      ] },
+    } }} mode="live" candles={[]} health={undefined} />);
+    expect(screen.getByText("可交易 · 2/2 门槛通过")).toBeVisible();
+    expect(screen.getByLabelText("TP 先于 SL 概率")).toBeVisible();
+  });
+
   it("offers timeframe plus primary and secondary indicator controls", () => {
     render(<SignalCanvas selected={demoSnapshot.opportunities[0]} mode="live" candles={[]} health={undefined} />);
     expect(screen.getAllByRole("button", { name: "5m" }).at(-1)).toBeVisible();

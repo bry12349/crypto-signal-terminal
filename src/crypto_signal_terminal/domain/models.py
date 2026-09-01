@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -127,6 +127,20 @@ class SignalAnalysis(FrozenModel):
     derivatives_bias: str
     order_flow_bias: str
     news_bias: str
+    decision: SignalDecision
+
+
+class DecisionGate(FrozenModel):
+    key: str
+    label: str
+    passed: bool
+    observed: Decimal
+    required: Decimal
+
+
+class SignalDecision(FrozenModel):
+    outcome: Literal["TRADE", "NO_TRADE"]
+    gates: tuple[DecisionGate, ...]
 
 
 class Opportunity(FrozenModel):

@@ -41,6 +41,8 @@ def test_fusion_allows_high_alignment_positive_expectancy() -> None:
     assert analysis.p_tp_before_sl > Decimal("0.56")
     assert analysis.expected_value > 0
     assert analysis.news_bias == "UNAVAILABLE"
+    assert analysis.decision.outcome == "TRADE"
+    assert all(gate.passed for gate in analysis.decision.gates)
 
 
 def test_fusion_rejects_conflicting_low_edge_setup() -> None:
@@ -58,3 +60,5 @@ def test_fusion_rejects_conflicting_low_edge_setup() -> None:
     assert analysis.is_tradeable is False
     assert analysis.evidence_conflict >= Decimal("0.30")
     assert analysis.expected_value <= 0
+    assert analysis.decision.outcome == "NO_TRADE"
+    assert any(gate.key == "expected_value" and not gate.passed for gate in analysis.decision.gates)

@@ -47,6 +47,10 @@ export interface SignalAnalysis {
   derivatives_bias: string;
   order_flow_bias: string;
   news_bias: string;
+  decision?: {
+    outcome: "TRADE" | "NO_TRADE";
+    gates: { key: string; label: string; passed: boolean; observed: string; required: string }[];
+  };
 }
 
 export interface Opportunity {

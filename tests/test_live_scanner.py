@@ -235,6 +235,7 @@ async def test_scanner_blocks_new_entries_after_a_sufficient_miscalibrated_histo
         store.upsert_signal_record(SignalRecord(
             signal_id=f"calibration:{index}", symbol="BTCUSDT", plan=plan,
             generated_at=snapshot.observed_at, predicted_probability=Decimal("0.70"),
+            signal_type="trend_continuation",
             outcome=SignalOutcome.STOP, settled_at=snapshot.observed_at,
         ))
 
@@ -246,6 +247,34 @@ async def test_scanner_blocks_new_entries_after_a_sufficient_miscalibrated_histo
     assert analysis is not None
     assert analysis.calibration.status == "DEGRADED"
     assert analysis.is_tradeable is False
+
+
+async def test_scanner_does_not_apply_a_failed_altcoin_history_to_a_trend_signal(tmp_path) -> None:
+    snapshot = _market(
+        "BTCUSDT", "67000", trend_4h=1, trend_1h=1, setup_15m=1,
+        trigger_5m=1, aggressive_flow_imbalance="0.6", depth_imbalance="0.2",
+        flow_persistence="0.8", oi_change_ratio="0.05", price_impact_bps="12",
+    )
+
+    class Market:
+        async def snapshot(self, symbol: str): return snapshot
+
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    plan = next(item.order_plan for item in build_demo_state().opportunities if item.order_plan is not None)
+    for index in range(30):
+        store.upsert_signal_record(SignalRecord(
+            signal_id=f"alt-calibration:{index}", symbol="SOLUSDT", plan=plan,
+            generated_at=snapshot.observed_at, predicted_probability=Decimal("0.70"),
+            signal_type="volatility_expansion", outcome=SignalOutcome.STOP, settled_at=snapshot.observed_at,
+        ))
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(state=state, market=Market(), watchlist=("BTCUSDT",), audit_store=store)
+    await scanner.scan_once()
+
+    analysis = state.opportunities[0].analysis
+    assert analysis is not None
+    assert analysis.calibration.status == "INSUFFICIENT"
 
 
 async def test_scanner_surfaces_public_onchain_wallet_roster_without_claiming_a_cex_order() -> None:

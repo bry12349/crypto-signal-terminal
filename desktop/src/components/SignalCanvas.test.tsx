@@ -118,7 +118,7 @@ describe("SignalCanvas", () => {
     } }} mode="live" candles={[]} health={undefined} />);
     expect(screen.getByText("可交易 · 2/2 门槛通过")).toBeVisible();
     expect(screen.getByLabelText("TP 先于 SL 概率")).toBeVisible();
-    expect(screen.getByText("历史校准：样本不足（1 笔已结算，不宣称胜率）")).toBeVisible();
+    expect(screen.getByText("策略校准：样本不足（1 笔已结算，不宣称胜率）")).toBeVisible();
   });
 
   it("offers timeframe plus primary and secondary indicator controls", () => {

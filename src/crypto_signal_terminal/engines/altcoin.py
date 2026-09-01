@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Callable
 
 from crypto_signal_terminal.domain.models import (
     CalibrationState,
@@ -25,7 +26,7 @@ class AltcoinEngine:
         self.max_spread_bps = max_spread_bps
         self.fusion = EvidenceFusion()
 
-    def evaluate(self, snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None) -> Opportunity | None:
+    def evaluate(self, snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None, calibration_for_direction: Callable[[Direction], CalibrationState] | None = None) -> Opportunity | None:
         if not snapshot.data_health.healthy or snapshot.symbol in {"BTCUSDT", "ETHUSDT"}:
             return None
         spread = _d(snapshot, "spread_bps", str((snapshot.ask - snapshot.bid) / snapshot.price * Decimal("10000")))
@@ -40,6 +41,8 @@ class AltcoinEngine:
         if atr > Decimal("25") or volume < Decimal("1.5") or abs(oi) < Decimal("0.03"):
             return None
         direction = Direction.LONG if flow + depth >= 0 else Direction.SHORT
+        if calibration_for_direction is not None:
+            calibration = calibration_for_direction(direction)
         trigger = int(snapshot.features.get("trigger_5m", 0))
         trigger_matches = trigger == (1 if direction is Direction.LONG else -1)
         cross_exchange = snapshot.peer_confirmations >= 2

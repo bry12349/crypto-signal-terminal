@@ -5,6 +5,7 @@ import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
+from crypto_signal_terminal.domain.models import Direction
 from crypto_signal_terminal.engines.signal_ledger import SignalRecord
 from crypto_signal_terminal.engines.signal_ledger import SignalOutcome
 
@@ -86,13 +87,14 @@ class AuditStore:
         ).fetchall()
         return [SignalRecord.from_dict(json.loads(row["payload_json"])) for row in rows]
 
-    def calibration_state(self, *, signal_type: str | None = None) -> dict:
+    def calibration_state(self, *, signal_type: str | None = None, direction: Direction | None = None) -> dict:
         records = self.signal_records(limit=10_000)
         settled = [
             record for record in records
             if record.outcome in {SignalOutcome.TP1, SignalOutcome.STOP}
             and record.predicted_probability is not None
             and (signal_type is None or record.signal_type == signal_type)
+            and (direction is None or record.plan.direction == direction)
         ]
         if settled:
             mean_predicted = sum((record.predicted_probability or Decimal("0") for record in settled), Decimal("0")) / len(settled)

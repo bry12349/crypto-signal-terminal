@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Callable
 
 from crypto_signal_terminal.domain.models import (
     CalibrationState,
@@ -24,7 +25,7 @@ class TrendEngine:
     def __init__(self) -> None:
         self.fusion = EvidenceFusion()
 
-    def evaluate(self, snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None) -> Opportunity | None:
+    def evaluate(self, snapshot: MarketSnapshot, *, calibration: CalibrationState | None = None, calibration_for_direction: Callable[[Direction], CalibrationState] | None = None) -> Opportunity | None:
         if not snapshot.data_health.healthy or snapshot.symbol not in {"BTCUSDT", "ETHUSDT"}:
             return None
         trend_4h = int(snapshot.features.get("trend_4h", 0))
@@ -34,6 +35,8 @@ class TrendEngine:
         if trend_4h == 0 or trend_4h != trend_1h or setup_15m != trend_4h:
             return None
         direction = Direction.LONG if trend_4h > 0 else Direction.SHORT
+        if calibration_for_direction is not None:
+            calibration = calibration_for_direction(direction)
         matching_trigger = trigger_5m == trend_4h
         directional_flow = _decimal(snapshot, "aggressive_flow_imbalance") * Decimal(trend_4h)
         flow_confirmed = directional_flow >= Decimal("0.10")

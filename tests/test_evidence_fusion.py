@@ -41,6 +41,7 @@ def test_fusion_allows_high_alignment_positive_expectancy() -> None:
     assert analysis.p_tp_before_sl > Decimal("0.56")
     assert analysis.expected_value > 0
     assert analysis.news_bias == "UNAVAILABLE"
+    assert analysis.smart_money_bias == "UNAVAILABLE"
     assert analysis.decision.outcome == "TRADE"
     assert all(gate.passed for gate in analysis.decision.gates)
 
@@ -84,3 +85,20 @@ def test_fusion_blocks_trade_when_a_sufficient_history_shows_the_model_is_miscal
     assert analysis.is_tradeable is False
     assert analysis.decision.outcome == "NO_TRADE"
     assert any(gate.key == "historical_calibration" and not gate.passed for gate in analysis.decision.gates)
+
+
+def test_fusion_only_labels_public_onchain_wallet_flow_as_smart_money() -> None:
+    analysis = EvidenceFusion().evaluate(
+        market(
+            trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1,
+            aggressive_flow_imbalance="0.72", depth_imbalance="0.44",
+            flow_persistence="0.92", oi_change_ratio="0.07",
+            volume_acceleration="2.2", atr_percentile="18", price_impact_bps="14",
+            smart_money_source="public_onchain_wallet", onchain_smart_money_flow="0.75",
+        ),
+        direction=Direction.LONG,
+        reward_to_risk=Decimal("1.8"),
+        signal_type="trend_continuation",
+    )
+
+    assert analysis.smart_money_bias == "BULLISH"

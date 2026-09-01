@@ -25,6 +25,13 @@ def _bias(value: Decimal, *, threshold: Decimal = Decimal("0.12")) -> str:
     return "NEUTRAL"
 
 
+def _smart_money_bias(snapshot: MarketSnapshot) -> str:
+    """Never relabel ordinary order flow as a smart-money observation."""
+    if snapshot.features.get("smart_money_source") != "public_onchain_wallet":
+        return "UNAVAILABLE"
+    return _bias(_d(snapshot, "onchain_smart_money_flow"))
+
+
 class EvidenceFusion:
     """Dynamic, explainable evidence fusion for a TP-before-SL estimate.
 
@@ -93,7 +100,7 @@ class EvidenceFusion:
             is_tradeable=tradeable,
             market_regime=regime,
             signal_type=signal_type,
-            smart_money_bias=_bias(flow * _clip(_d(snapshot, "flow_persistence"))),
+            smart_money_bias=_smart_money_bias(snapshot),
             derivatives_bias=_bias(directional_derivatives),
             order_flow_bias=_bias(directional_flow),
             news_bias="UNAVAILABLE",

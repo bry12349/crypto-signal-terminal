@@ -25,6 +25,7 @@ class AuditStore:
         "telegram_message_versions_plaintext_legacy",
         "notification_deliveries",
     )
+    _CALIBRATION_WINDOW = 200
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -96,7 +97,7 @@ class AuditStore:
             and (signal_type is None or record.signal_type == signal_type)
             and (direction is None or record.plan.direction == direction)
             and (symbol is None or record.symbol == symbol)
-        ]
+        ][:self._CALIBRATION_WINDOW]
         if settled:
             mean_predicted = sum((record.predicted_probability or Decimal("0") for record in settled), Decimal("0")) / len(settled)
             observed_win_rate = Decimal(sum(record.outcome is SignalOutcome.TP1 for record in settled)) / len(settled)

@@ -210,6 +210,33 @@ def test_calibration_degrades_when_individual_probabilities_are_wrong_despite_ma
     assert calibration["status"] == "DEGRADED"
 
 
+def test_calibration_uses_a_recent_rolling_window_instead_of_permanent_old_regimes(tmp_path) -> None:
+    store = AuditStore(tmp_path / "audit.sqlite3")
+    opportunity = next(item for item in build_demo_state().opportunities if item.order_plan is not None)
+    for index in range(100):
+        store.upsert_signal_record(SignalRecord(
+            signal_id=f"old-regime:{index}", symbol="BTCUSDT", plan=opportunity.order_plan,
+            generated_at=opportunity.created_at - timedelta(days=100, seconds=index), predicted_probability=Decimal("0.70"),
+            signal_type="trend_continuation", outcome=SignalOutcome.STOP, settled_at=opportunity.updated_at,
+        ))
+    for index in range(200):
+        store.upsert_signal_record(SignalRecord(
+            signal_id=f"recent-regime:{index}", symbol="BTCUSDT", plan=opportunity.order_plan,
+            generated_at=opportunity.created_at + timedelta(seconds=index), predicted_probability=Decimal("0.70"),
+            signal_type="trend_continuation", outcome=SignalOutcome.TP1 if index < 140 else SignalOutcome.STOP,
+            settled_at=opportunity.updated_at,
+        ))
+
+    calibration = store.calibration_state(
+        signal_type="trend_continuation", direction=opportunity.order_plan.direction, symbol="BTCUSDT",
+    )
+
+    assert calibration["settled"] == 200
+    assert calibration["observed_win_rate"] == 0.7
+    assert calibration["brier_score"] == 0.21
+    assert calibration["status"] == "VALIDATED"
+
+
 def test_audit_store_removes_retired_message_tables(tmp_path) -> None:
     path = tmp_path / "audit.sqlite3"
     connection = __import__("sqlite3").connect(path)

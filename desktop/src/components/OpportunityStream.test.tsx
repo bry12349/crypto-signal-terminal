@@ -103,4 +103,20 @@ describe("OpportunityStream", () => {
     expect(cards[1]).toHaveTextContent("已过期");
     expect(screen.queryByRole("button", { name: "查看最佳信号" })).not.toBeInTheDocument();
   });
+
+  it("keeps stock and commodity opportunities out of the altcoin filter", () => {
+    const profile = (asset_profile: "ALT" | "COMMODITY" | "US_EQUITY"): Opportunity["analysis"] => ({
+      opportunity_score: 50, confidence: 50, p_tp_before_sl: "0.5", expected_value: "0", evidence_conflict: "0", is_tradeable: false,
+      market_regime: "RANGE", signal_type: "test", smart_money_bias: "UNAVAILABLE", derivatives_bias: "NEUTRAL", order_flow_bias: "NEUTRAL", news_bias: "UNAVAILABLE", asset_profile,
+    });
+    const commodity = { ...items[0], id: "commodity", symbol: "XAUUSDT", analysis: profile("COMMODITY") };
+    const equity = { ...items[0], id: "equity", symbol: "AAPLUSDT", analysis: profile("US_EQUITY") };
+    render(<OpportunityStream items={[items[0], commodity, equity]} selectedId={null} onSelect={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "山寨" }));
+    expect(screen.getAllByTestId("opportunity")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "大宗商品" }));
+    expect(screen.getAllByTestId("opportunity")[0]).toHaveTextContent("XAU");
+    fireEvent.click(screen.getByRole("button", { name: "美股" }));
+    expect(screen.getAllByTestId("opportunity")[0]).toHaveTextContent("AAPL");
+  });
 });

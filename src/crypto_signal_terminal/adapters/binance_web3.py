@@ -24,7 +24,14 @@ def _decimal(value: object) -> Decimal:
 
 
 def _symbol(value: object) -> str:
-    return re.sub(r"[^A-Z0-9]", "", str(value).upper())[:20]
+    raw = str(value or "").strip().upper()
+    ascii_symbol = re.sub(r"[^A-Z0-9]", "", raw)
+    if len(ascii_symbol) >= 2:
+        return ascii_symbol[:20]
+    # Binance Web3 returns localized token names for many BSC assets. Keep
+    # those names for display; the scanner creates an ASCII chart identity
+    # from the token address so they cannot collapse into one ONCHAIN symbol.
+    return re.sub(r"\s+", "", raw)[:20]
 
 
 @dataclass(frozen=True)

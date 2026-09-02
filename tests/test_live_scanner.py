@@ -1,4 +1,4 @@
-from crypto_signal_terminal.main import _market, build_demo_state
+from crypto_signal_terminal.main import DEMO_TIME, _market, build_demo_state
 from crypto_signal_terminal.main import build_live_state
 from decimal import Decimal
 
@@ -127,6 +127,17 @@ async def test_wallet_tracking_survives_when_all_cex_market_snapshots_fail() -> 
     assert await scanner.scan_once() == 0
     assert [item.wallet for item in state.smart_money] == ["0xabc"]
     assert state.opportunities == []
+
+
+def test_wallet_candidate_keeps_non_ascii_token_name_and_deterministic_chart_identity() -> None:
+    flow = OnchainWalletFlow(
+        wallet="0xabc", label="KOL", token_symbol="牛来", token_address="0xbeea1d618e533a387d941f58a7d4c9b7bd377777",
+        direction=Direction.LONG, notional_delta=Decimal("100"), score=80, is_baseline=False,
+    )
+    candidate = LiveMarketScanner._wallet_candidates((flow,), DEMO_TIME)[0]
+    assert candidate.symbol != "ONCHAIN"
+    assert candidate.display_symbol == "牛来"
+    assert candidate.token_address == "0xbeea1d618e533a387d941f58a7d4c9b7bd377777"
 
 
 async def test_wallet_roster_is_not_cleared_during_tracker_cache_interval() -> None:

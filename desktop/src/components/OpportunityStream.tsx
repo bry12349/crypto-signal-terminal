@@ -13,7 +13,7 @@ const labels: Record<Opportunity["state"], string> = {
   INVALIDATED: "已失效", EXPIRED: "已过期", CLOSED: "已结束",
 };
 
-const filters = ["全部", "主流", "山寨", "聪明钱"] as const;
+const filters = ["全部", "主流", "山寨", "大宗商品", "美股", "聪明钱"] as const;
 type Filter = typeof filters[number];
 
 function SourceIcon({ source }: { source: Opportunity["source"] }) {
@@ -26,7 +26,9 @@ function matchesFilter(item: Opportunity, filter: Filter) {
   if (filter === "全部") return true;
   if (filter === "聪明钱") return item.source === "SMART_MONEY";
   if (filter === "主流") return item.symbol === "BTCUSDT" || item.symbol === "ETHUSDT";
-  return item.source !== "SMART_MONEY" && item.symbol !== "BTCUSDT" && item.symbol !== "ETHUSDT";
+  if (filter === "大宗商品") return item.analysis?.asset_profile === "COMMODITY";
+  if (filter === "美股") return item.analysis?.asset_profile === "US_EQUITY";
+  return item.source !== "SMART_MONEY" && item.analysis?.asset_profile !== "COMMODITY" && item.analysis?.asset_profile !== "US_EQUITY" && item.symbol !== "BTCUSDT" && item.symbol !== "ETHUSDT";
 }
 
 function hasActivePlan(item: Opportunity) {
@@ -52,6 +54,7 @@ function visibleState(item: Opportunity) {
 }
 
 function contractLabel(item: Opportunity) {
+  if (item.onchain_token_address) return "BSC DEX";
   const profile = item.analysis?.asset_profile;
   if (profile === "COMMODITY") return "COMMODITY PERP";
   if (profile === "US_EQUITY") return "US STOCK PERP";

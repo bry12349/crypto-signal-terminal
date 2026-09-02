@@ -41,4 +41,15 @@ describe("mergeSignalPaths", () => {
 
     expect(opportunities[0].market_symbol).toBe("BTCUSDT");
   });
+
+  it("keeps a human token name while preserving its on-chain chart identity", () => {
+    const opportunities = mergeSignalPaths({
+      mode: "live", opportunities: [], candles: {}, smart_money: [{
+        id: "onchain-wallet:0xabc:2", symbol: "CHAINBEEA1D", display_symbol: "牛来", kind: "ONCHAIN_CLUSTER", direction: "LONG", score: 88,
+        observed_at: "2026-08-29T00:00:00Z", wallet: "0xabc", chain: "BSC · Binance Web3 公开钱包", token_address: "0xbeea1d", evidence: [],
+      }],
+    });
+    expect(opportunities[0].symbol).toBe("牛来");
+    expect(opportunities[0].onchain_token_address).toBe("0xbeea1d");
+  });
 });

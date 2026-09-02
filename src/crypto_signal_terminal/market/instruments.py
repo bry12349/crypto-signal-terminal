@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from crypto_signal_terminal.domain.models import AssetClass
 
 
@@ -22,6 +24,15 @@ DEFAULT_US_EQUITY_WATCHLIST = ("AAPLUSDT", "NVDAUSDT", "TSLAUSDT", "MSFTUSDT", "
 
 def normalize_symbol(symbol: str) -> str:
     return symbol.upper().replace("/", "").replace("-", "")
+
+
+def canonical_onchain_symbol(token_symbol: str, token_address: str | None) -> str:
+    """Return an ASCII identity for a token whose display ticker may be Unicode."""
+    normalized = re.sub(r"[^A-Z0-9]", "", str(token_symbol).upper())
+    if len(normalized) >= 2:
+        return normalized[:20]
+    address = re.sub(r"[^A-F0-9]", "", str(token_address or "").upper())
+    return f"CHAIN{address[:8]}" if address else "ONCHAIN"
 
 
 def asset_class_for_symbol(symbol: str) -> AssetClass:

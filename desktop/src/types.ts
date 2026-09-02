@@ -94,6 +94,7 @@ export interface SmartMoneyCandidate {
   wallet?: string | null;
   chain?: string | null;
   token_address?: string | null;
+  display_symbol?: string | null;
 }
 
 export interface Candle {

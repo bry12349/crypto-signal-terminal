@@ -7,7 +7,7 @@ const API = "http://127.0.0.1:8765";
 export function mergeSignalPaths(snapshot: Snapshot): Opportunity[] {
   const smart: Opportunity[] = snapshot.smart_money.map((item) => ({
     id: item.id,
-    symbol: item.symbol,
+    symbol: item.display_symbol ?? item.symbol,
     source: "SMART_MONEY",
     state: "ARMED",
     confidence: item.score,

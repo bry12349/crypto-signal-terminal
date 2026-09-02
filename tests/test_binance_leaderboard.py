@@ -52,3 +52,20 @@ async def test_web3_tracker_bootstraps_public_wallet_roster_then_emits_activity_
     assert activity[0].is_baseline is False
     assert activity[0].notional_delta == Decimal("30000")
     assert activity[0].direction is Direction.LONG
+
+
+@pytest.mark.asyncio
+async def test_web3_tracker_preserves_unicode_token_ticker_instead_of_collapsing_to_onchain() -> None:
+    row = {
+        "address": "0xabc", "realizedPnl": "1", "winRate": "0.5", "totalVolume": "100",
+        "buyVolume": "60", "sellVolume": "40", "lastActivity": 1,
+        "topEarningTokens": [{"tokenAddress": "0xbeea1d", "tokenSymbol": "牛来"}],
+    }
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"code": "000000", "data": {"data": [row]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://web3.binance.com") as client:
+        tracker = BinanceWeb3WalletTracker(client=client, refresh_seconds=0)
+        flows = await tracker.observe()
+    assert flows[0].token_symbol == "牛来"

@@ -28,7 +28,7 @@ from crypto_signal_terminal.engines.equity import EquityEngine
 from crypto_signal_terminal.engines.signal_ledger import SignalRecord, settle_signal
 from crypto_signal_terminal.cycle import CycleState, cycle_state_at
 from crypto_signal_terminal.market.health import classify_market_error
-from crypto_signal_terminal.market.instruments import asset_class_for_symbol
+from crypto_signal_terminal.market.instruments import asset_class_for_symbol, canonical_onchain_symbol
 from crypto_signal_terminal.storage import AuditStore
 
 
@@ -222,9 +222,10 @@ class LiveMarketScanner:
         for flow in flows:
             action = "纳入追踪池" if flow.is_baseline else "出现新的链上活动"
             direction_text = "买入偏向" if flow.direction is Direction.LONG else "卖出偏向"
+            canonical = canonical_onchain_symbol(flow.token_symbol, flow.token_address)
             candidates.append(SmartMoneyCandidate(
                 id=f"onchain-wallet:{flow.wallet}:{int(observed_at.timestamp())}",
-                symbol=flow.token_symbol,
+                symbol=canonical,
                 kind=SmartMoneyKind.ONCHAIN_CLUSTER,
                 direction=flow.direction,
                 score=flow.score,
@@ -232,6 +233,7 @@ class LiveMarketScanner:
                 wallet=flow.wallet,
                 chain="BSC · Binance Web3 公开钱包",
                 token_address=flow.token_address,
+                display_symbol=flow.token_symbol if flow.token_symbol != canonical else None,
                 evidence=(
                     Evidence(
                         code="public_wallet_tracking",

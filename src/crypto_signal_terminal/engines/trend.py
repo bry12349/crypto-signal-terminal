@@ -64,9 +64,21 @@ class TrendEngine:
             calibration=calibration,
         )
         evidence = evidence + (
+            Evidence(code="asset_model", text=f"{analysis.asset_profile} 专用权重模型 · v{analysis.model_version}", weight=0),
             Evidence(code="tp_before_sl", text="模型估计 TP 先于 SL 的概率", weight=16, value=analysis.p_tp_before_sl),
             Evidence(code="expected_value", text="计入费用与滑点后的净期望值", weight=16, value=analysis.expected_value),
         )
+        if analysis.narrative_sources:
+            evidence += (Evidence(
+                code="public_narrative", text=f"{len(analysis.narrative_sources)} 个独立公开来源共识：{analysis.narrative_bias}",
+                weight=4 if snapshot.symbol == "BTCUSDT" else 4, value=analysis.narrative_score,
+                source=" | ".join(analysis.narrative_sources),
+            ),)
+        if snapshot.symbol == "BTCUSDT" and snapshot.features.get("btc_cycle_phase"):
+            evidence += (Evidence(
+                code="btc_block_cycle", text=f"区块高度周期背景：{snapshot.features['btc_cycle_phase']}",
+                weight=8, value=_decimal(snapshot, "btc_cycle_bias"), source="public_bitcoin_tip_height",
+            ),)
         if not matching_trigger or not flow_confirmed or not liquid_enough or not analysis.is_tradeable:
             return Opportunity(
                 id=f"trend:{snapshot.symbol}:armed",

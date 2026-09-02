@@ -120,3 +120,17 @@ def test_altcoin_trigger_waits_when_orderbook_slippage_is_excessive() -> None:
     assert result is not None
     assert result.state is LifecycleState.ARMED
     assert result.order_plan is None
+
+
+def test_altcoin_long_is_blocked_when_btc_regime_is_strongly_bearish() -> None:
+    result = AltcoinEngine().evaluate(snapshot(
+        symbol="SUIUSDT", atr_percentile=10, volume_acceleration="2.2",
+        oi_change_ratio="0.08", aggressive_flow_imbalance="0.6",
+        depth_imbalance="0.45", trigger_5m=1, spread_bps="8",
+        slippage_bps_1000="4", btc_regime_score="-0.8",
+    ))
+
+    assert result is not None
+    assert result.state is LifecycleState.ARMED
+    assert result.order_plan is None
+    assert any(gate.key == "btc_regime_alignment" and not gate.passed for gate in result.analysis.decision.gates)

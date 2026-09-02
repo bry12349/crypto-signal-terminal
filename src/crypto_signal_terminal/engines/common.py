@@ -15,7 +15,13 @@ def basic_order_plan(
     max_slippage_bps: Decimal = Decimal("10"),
 ) -> OrderPlan:
     price = snapshot.price
-    distance = max(price * Decimal("0.006"), Decimal("0.000001"))
+    profile = "BTC" if snapshot.symbol == "BTCUSDT" else "ETH" if snapshot.symbol == "ETHUSDT" else "ALT"
+    defaults = {"BTC": Decimal("0.006"), "ETH": Decimal("0.008"), "ALT": Decimal("0.012")}
+    floors = {"BTC": Decimal("0.0035"), "ETH": Decimal("0.005"), "ALT": Decimal("0.008")}
+    ceilings = {"BTC": Decimal("0.018"), "ETH": Decimal("0.022"), "ALT": Decimal("0.035")}
+    atr_ratio = Decimal(str(snapshot.features.get("atr_ratio", "0")))
+    distance_ratio = defaults[profile] if atr_ratio <= 0 else max(floors[profile], min(ceilings[profile], atr_ratio * Decimal("1.2")))
+    distance = max(price * distance_ratio, Decimal("0.000001"))
     half_spread = (snapshot.ask - snapshot.bid) / Decimal("2")
     if order_type is OrderType.LIMIT:
         entry_low = price - half_spread if direction is Direction.LONG else price

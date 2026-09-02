@@ -15,12 +15,15 @@ from crypto_signal_terminal.domain.models import (
     SmartMoneyCandidate,
     SmartMoneyKind,
     SourceKind,
+    NarrativeObservation,
 )
 from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
 from crypto_signal_terminal.engines.evidence_fusion import EvidenceFusion
+from crypto_signal_terminal.engines.narrative import NarrativeEngine
 from crypto_signal_terminal.engines.signal_ledger import SignalRecord, settle_signal
+from crypto_signal_terminal.cycle import CycleState, cycle_state_at
 from crypto_signal_terminal.market.health import classify_market_error
 from crypto_signal_terminal.storage import AuditStore
 
@@ -31,6 +34,14 @@ class MarketProvider(Protocol):
 
 class WalletTracker(Protocol):
     async def observe(self) -> tuple[Any, ...]: ...
+
+
+class NarrativeProvider(Protocol):
+    async def observe(self, symbols: tuple[str, ...]) -> tuple[NarrativeObservation, ...]: ...
+
+
+class CycleHeightProvider(Protocol):
+    async def tip_height(self) -> int: ...
 
 
 DEFAULT_WATCHLIST = (
@@ -135,6 +146,8 @@ class LiveMarketScanner:
         max_concurrency: int = 6,
         audit_store: AuditStore | None = None,
         wallet_tracker: WalletTracker | None = None,
+        narrative_provider: NarrativeProvider | None = None,
+        cycle_height_provider: CycleHeightProvider | None = None,
     ) -> None:
         self.state = state
         self.market = market
@@ -144,11 +157,16 @@ class LiveMarketScanner:
         self.max_concurrency = max(1, max_concurrency)
         self.audit_store = audit_store
         self.wallet_tracker = wallet_tracker
+        self.narrative_provider = narrative_provider
+        self.cycle_height_provider = cycle_height_provider
         self._wallet_roster: list[SmartMoneyCandidate] = []
+        self._cycle_state: CycleState | None = None
+        self._next_cycle_refresh = 0.0
         self._active_strategy_ids: set[str] = set()
         self.trend = TrendEngine()
         self.altcoin = AltcoinEngine()
         self.smart = SmartMoneyEngine()
+        self.narrative = NarrativeEngine()
         self.state.market_health_registry.set_watchlist(watchlist)
 
     def _calibration_state(self, signal_type: str, direction: Direction | None = None, symbol: str | None = None) -> CalibrationState:
@@ -241,6 +259,84 @@ class LiveMarketScanner:
             pass
         return self._wallet_roster
 
+    async def _current_narrative(self) -> tuple[NarrativeObservation, ...]:
+        if self.narrative_provider is None:
+            return ()
+        try:
+            return await asyncio.wait_for(self.narrative_provider.observe(self.watchlist), timeout=1.5)
+        except Exception:
+            return ()
+
+    async def _current_cycle(self) -> CycleState | None:
+        if self.cycle_height_provider is None:
+            return self._cycle_state
+        loop = asyncio.get_running_loop()
+        if self._cycle_state is not None and loop.time() < self._next_cycle_refresh:
+            return self._cycle_state
+        try:
+            height = await asyncio.wait_for(self.cycle_height_provider.tip_height(), timeout=1.5)
+            self._cycle_state = cycle_state_at(height)
+            self._next_cycle_refresh = loop.time() + 300
+        except Exception:
+            pass
+        return self._cycle_state
+
+    @staticmethod
+    def _btc_regime(snapshots: list[MarketSnapshot]) -> Decimal:
+        btc = next((item for item in snapshots if item.symbol == "BTCUSDT"), None)
+        if btc is None:
+            return Decimal("0")
+        def value(key: str) -> Decimal:
+            return Decimal(str(btc.features.get(key, "0")))
+        if "trend_strength_4h" in btc.features:
+            trend = value("trend_strength_4h") * Decimal("0.55") + value("trend_strength_1h") * Decimal("0.45")
+        else:
+            trend = value("trend_4h") * Decimal("0.55") + value("trend_1h") * Decimal("0.45")
+        flow = value("aggressive_flow_imbalance")
+        score = trend * Decimal("0.75") + flow * Decimal("0.25")
+        return max(Decimal("-1"), min(Decimal("1"), score))
+
+    def _enrich_snapshots(
+        self,
+        snapshots: list[MarketSnapshot],
+        *,
+        wallet_candidates: list[SmartMoneyCandidate],
+        narrative: tuple[NarrativeObservation, ...],
+        cycle: CycleState | None,
+    ) -> list[MarketSnapshot]:
+        btc_regime = self._btc_regime(snapshots)
+        wallet_by_symbol: dict[str, list[SmartMoneyCandidate]] = {}
+        for candidate in wallet_candidates:
+            market_symbol = candidate.symbol if candidate.symbol.endswith("USDT") else f"{candidate.symbol}USDT"
+            wallet_by_symbol.setdefault(market_symbol, []).append(candidate)
+        enriched: list[MarketSnapshot] = []
+        for snapshot in snapshots:
+            features = dict(snapshot.features)
+            features["btc_regime_score"] = str(btc_regime.quantize(Decimal("0.001")))
+            if cycle is not None:
+                features["btc_cycle_bias"] = "1" if cycle.market_bias == "BULLISH" else "-1"
+                features["btc_cycle_phase"] = cycle.phase
+            assessment = self.narrative.assess(snapshot.symbol, narrative, as_of=snapshot.observed_at)
+            news_assessment = self.narrative.assess(
+                snapshot.symbol, tuple(item for item in narrative if item.source_kind == "NEWS"), as_of=snapshot.observed_at,
+            )
+            features.update({
+                "narrative_bias": assessment.bias,
+                "narrative_score": str(assessment.score),
+                "narrative_independent_sources": assessment.independent_sources,
+                "narrative_sources": "|".join(assessment.sources),
+                "news_bias": news_assessment.bias,
+            })
+            wallets = [item for item in wallet_by_symbol.get(snapshot.symbol, []) if not getattr(item, "is_baseline", False)]
+            if wallets:
+                signed = sum((Decimal(item.score) * (Decimal("1") if item.direction is Direction.LONG else Decimal("-1")) for item in wallets), Decimal("0"))
+                score_total = sum(item.score for item in wallets)
+                if score_total > 0:
+                    features["smart_money_source"] = "public_onchain_wallet"
+                    features["onchain_smart_money_flow"] = str((signed / Decimal(score_total)).quantize(Decimal("0.001")))
+            enriched.append(snapshot.model_copy(update={"features": features}))
+        return enriched
+
     async def scan_once(self) -> int:
         if self.universe is not None:
             try:
@@ -279,6 +375,13 @@ class LiveMarketScanner:
             self.state.mode = "live"
             self.state.publish({"type": "snapshot", "payload": self.state.snapshot()})
             return 0
+        observed_at = max(item.observed_at for item in snapshots)
+        wallet_candidates, narrative, cycle = await asyncio.gather(
+            self._current_wallet_roster(observed_at), self._current_narrative(), self._current_cycle(),
+        )
+        snapshots = self._enrich_snapshots(
+            snapshots, wallet_candidates=wallet_candidates, narrative=narrative, cycle=cycle,
+        )
         self._settle_recorded_signals(snapshots)
         opportunities = []
         smart_money = []
@@ -295,7 +398,7 @@ class LiveMarketScanner:
                 opportunities.append(_forming_observation(snapshot, calibration=self._calibration_state("market_observation", symbol=snapshot.symbol)))
             if candidate:
                 smart_money.append(candidate)
-        smart_money.extend(await self._current_wallet_roster(max(item.observed_at for item in snapshots)))
+        smart_money.extend(wallet_candidates)
         self.state.opportunities = rank_opportunities(opportunities)
         self._record_new_signals(self.state.opportunities)
         self.state.smart_money = sorted(smart_money, key=lambda item: item.score, reverse=True)

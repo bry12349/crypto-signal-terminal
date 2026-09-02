@@ -21,6 +21,15 @@ def _sign(value: Decimal, threshold: Decimal = Decimal("0")) -> int:
     return 1 if value > threshold else -1 if value < -threshold else 0
 
 
+def _trend_strength(closes: list[Decimal], window: int) -> Decimal:
+    """Directional efficiency in [-1, 1], robust to symbol price scale."""
+    values = closes[-window:]
+    if len(values) < 3:
+        return Decimal("0")
+    path = sum((abs(right - left) for left, right in zip(values, values[1:])), Decimal("0"))
+    return Decimal("0") if path == 0 else max(Decimal("-1"), min(Decimal("1"), (values[-1] - values[0]) / path))
+
+
 def _book_slippage_bps(book: dict, reference: Decimal, notional_usd: Decimal = Decimal("1000")) -> Decimal:
     if reference <= 0:
         return Decimal("9999")
@@ -247,9 +256,10 @@ class BybitCompositeMarketClient:
         hour_closes = [_d(row[4]) for row in hour]
         fifteen_closes = [_d(row[4]) for row in fifteen]
         five_closes = [_d(row[4]) for row in five]
-        hour_move = hour_closes[-1] - hour_closes[-2] if len(hour_closes) >= 2 else Decimal("0")
-        four_hour_move = four_closes[-1] - four_closes[-2] if len(four_closes) >= 2 else Decimal("0")
-        setup_move = fifteen_closes[-1] - fifteen_closes[-2] if len(fifteen_closes) >= 2 else Decimal("0")
+        strength_4h = _trend_strength(four_closes, 12)
+        strength_1h = _trend_strength(hour_closes, 12)
+        strength_15m = _trend_strength(fifteen_closes, 8)
+        strength_5m = _trend_strength(five_closes, 5)
         trigger_move = five_closes[-1] - five_closes[-2] if len(five_closes) >= 2 else Decimal("0")
 
         bids = sum((_d(row[1]) for row in book.get("b", [])), Decimal("0"))
@@ -289,11 +299,21 @@ class BybitCompositeMarketClient:
         last_price = _d(trades[0]["price"]) if trades else Decimal("0")
         impact = (last_price - first_price) / first_price * 10000 if first_price else Decimal("0")
         absorption = abs(flow) - min(Decimal("1"), abs(impact) / Decimal("20"))
+        best_bid = _d(book.get("b", [["0"]])[0][0]) if book.get("b") else Decimal("0")
+        best_ask = _d(book.get("a", [["0"]])[0][0]) if book.get("a") else Decimal("0")
+        mid = (best_bid + best_ask) / Decimal("2")
+        spread_bps = (best_ask - best_bid) / mid * Decimal("10000") if mid > 0 else Decimal("9999")
+        recent_ranges = ranges[-14:]
+        atr_ratio = (sum(recent_ranges, Decimal("0")) / Decimal(len(recent_ranges)) / five_closes[-1]) if recent_ranges and five_closes[-1] else Decimal("0")
         return {
-            "trend_4h": _sign(four_hour_move),
-            "trend_1h": _sign(hour_move),
-            "setup_15m": _sign(setup_move),
+            "trend_4h": _sign(strength_4h, Decimal("0.08")),
+            "trend_1h": _sign(strength_1h, Decimal("0.08")),
+            "setup_15m": _sign(strength_15m, Decimal("0.08")),
             "trigger_5m": _sign(trigger_move),
+            "trend_strength_4h": str(strength_4h.quantize(Decimal("0.0001"))),
+            "trend_strength_1h": str(strength_1h.quantize(Decimal("0.0001"))),
+            "setup_strength_15m": str(strength_15m.quantize(Decimal("0.0001"))),
+            "trigger_strength_5m": str(strength_5m.quantize(Decimal("0.0001"))),
             "depth_imbalance": str(depth.quantize(Decimal("0.0001"))),
             "aggressive_flow_imbalance": str(flow.quantize(Decimal("0.0001"))),
             "flow_persistence": str(persistence.quantize(Decimal("0.01"))),
@@ -305,4 +325,6 @@ class BybitCompositeMarketClient:
             "volume_acceleration": str(volume_acceleration.quantize(Decimal("0.01"))),
             "price_impact_bps": str(impact.quantize(Decimal("0.01"))),
             "absorption": str(absorption.quantize(Decimal("0.01"))),
+            "spread_bps": str(spread_bps.quantize(Decimal("0.01"))),
+            "atr_ratio": str(atr_ratio.quantize(Decimal("0.000001"))),
         }

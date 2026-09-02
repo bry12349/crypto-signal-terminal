@@ -10,6 +10,7 @@ import uvicorn
 
 from crypto_signal_terminal.api import ApplicationState, create_app
 from crypto_signal_terminal.adapters.binance_web3 import BinanceWeb3WalletTracker
+from crypto_signal_terminal.adapters.narrative import PublicNarrativeClient, sources_from_environment
 from crypto_signal_terminal.adapters.exchanges import BitcoinHeightClient
 from crypto_signal_terminal.adapters.geckoterminal import GeckoTerminalMarketClient
 from crypto_signal_terminal.config import KeyringSecretStore, MemorySecretStore, SecretStore, Settings
@@ -122,15 +123,19 @@ def run() -> None:
     onchain_market = GeckoTerminalMarketClient()
     state.market_provider = live_market
     state.onchain_market_provider = onchain_market
-    state.cycle_height_provider = BitcoinHeightClient()
+    cycle_height = BitcoinHeightClient()
+    state.cycle_height_provider = cycle_height
     hot_universe = MajorExchangeHotUniverse()
     wallet_tracker = BinanceWeb3WalletTracker()
+    narrative_provider = PublicNarrativeClient(sources=sources_from_environment())
     scanner = LiveMarketScanner(
         state=state,
         market=live_market,
         universe=hot_universe,
         audit_store=store,
         wallet_tracker=wallet_tracker,
+        narrative_provider=narrative_provider,
+        cycle_height_provider=cycle_height,
     )
 
     async def background(stop):
@@ -144,6 +149,7 @@ def run() -> None:
             await onchain_market.close()
             await hot_universe.close()
             await wallet_tracker.close()
+            await narrative_provider.close()
 
     uvicorn.run(
         create_app(state, secret_store=secrets, audit_store=store, background_runner=background),

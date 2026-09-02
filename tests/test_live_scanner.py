@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from crypto_signal_terminal.adapters.binance_web3 import OnchainWalletFlow
 from crypto_signal_terminal.domain.models import Candle, Direction, LifecycleState, SmartMoneyKind
+from crypto_signal_terminal.domain.models import NarrativeObservation
+from datetime import timedelta
 from crypto_signal_terminal.market.scanner import LiveMarketScanner, rank_opportunities
 from crypto_signal_terminal.storage import AuditStore
 from crypto_signal_terminal.engines.signal_ledger import SignalOutcome, SignalRecord
@@ -346,6 +348,61 @@ async def test_scanner_does_not_apply_failed_btc_history_to_an_eth_signal(tmp_pa
     analysis = state.opportunities[0].analysis
     assert analysis is not None
     assert analysis.calibration.status == "INSUFFICIENT"
+
+
+async def test_scanner_injects_cycle_narrative_and_wallet_context_into_asset_specific_models() -> None:
+    snapshots = {
+        "BTCUSDT": _market(
+            "BTCUSDT", "67000", trend_4h=1, trend_1h=1, setup_15m=1, trigger_5m=1,
+            aggressive_flow_imbalance="0.6", depth_imbalance="0.2", flow_persistence="0.8",
+            oi_change_ratio="0.05", volume_acceleration="2", price_impact_bps="12",
+        ),
+        "SOLUSDT": _market(
+            "SOLUSDT", "146", atr_percentile=10, volume_acceleration="2",
+            oi_change_ratio="0.08", aggressive_flow_imbalance="0.7", depth_imbalance="0.3",
+            trigger_5m=1, spread_bps="3", flow_persistence="0.8", price_impact_bps="15",
+        ),
+    }
+
+    class Market:
+        async def snapshot(self, symbol: str): return snapshots[symbol]
+
+    class Narrative:
+        async def observe(self, symbols: tuple[str, ...]):
+            del symbols
+            return tuple(
+                NarrativeObservation(
+                    id=f"{source}:{symbol}", source_id=source, source_name=source,
+                    source_kind="ANALYST", published_at=next(iter(snapshots.values())).observed_at - timedelta(minutes=5),
+                    symbols=(symbol,), stance=Decimal("0.8"), confidence=Decimal("0.7"),
+                    source_prior=Decimal("0.55"), text=f"{source} bullish breakout",
+                )
+                for symbol in snapshots for source in ("analyst-a", "forum-b")
+            )
+
+    class WalletTracker:
+        async def observe(self):
+            return (OnchainWalletFlow(
+                wallet="0xabc", label="公开钱包", token_symbol="SOL", direction=Direction.LONG,
+                notional_delta=Decimal("500000"), score=84, is_baseline=False,
+            ),)
+
+    class CycleHeight:
+        async def tip_height(self): return 770_000
+
+    state = build_live_state()
+    scanner = LiveMarketScanner(
+        state=state, market=Market(), watchlist=tuple(snapshots), narrative_provider=Narrative(),
+        wallet_tracker=WalletTracker(), cycle_height_provider=CycleHeight(),
+    )
+    await scanner.scan_once()
+
+    by_symbol = {item.symbol: item for item in state.opportunities}
+    assert by_symbol["BTCUSDT"].analysis.asset_profile == "BTC"
+    assert by_symbol["BTCUSDT"].analysis.narrative_bias == "BULLISH"
+    assert by_symbol["BTCUSDT"].analysis.narrative_sources == ("analyst-a", "forum-b")
+    assert by_symbol["SOLUSDT"].analysis.asset_profile == "ALT"
+    assert by_symbol["SOLUSDT"].analysis.smart_money_bias == "BULLISH"
 
 
 async def test_scanner_surfaces_public_onchain_wallet_roster_without_claiming_a_cex_order() -> None:

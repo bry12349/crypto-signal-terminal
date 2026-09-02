@@ -111,12 +111,12 @@ describe("SignalCanvas", () => {
     expect(screen.getByText("链上池 · MEMESTOCK / BSC")).toBeVisible();
   });
 
-  it("surfaces unavailable news as an explicit bias instead of fabricating it", () => {
+  it("surfaces unavailable narrative data explicitly instead of fabricating it", () => {
     render(<SignalCanvas selected={{ ...demoSnapshot.opportunities[0], analysis: {
       opportunity_score: 70, confidence: 72, p_tp_before_sl: "0.62", expected_value: "0.11", evidence_conflict: "0.14", is_tradeable: true,
       market_regime: "TREND", signal_type: "trend_continuation", smart_money_bias: "BULLISH", derivatives_bias: "BULLISH", order_flow_bias: "BULLISH", news_bias: "UNAVAILABLE",
     } }} mode="live" candles={[]} health={undefined} />);
-    expect(screen.getByText("NEWS UNAVAILABLE")).toBeVisible();
+    expect(screen.getByText("NARRATIVE UNAVAILABLE")).toBeVisible();
   });
 
   it("shows the auditable trade decision gates instead of a black-box score", () => {

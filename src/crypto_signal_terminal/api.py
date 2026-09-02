@@ -81,7 +81,7 @@ def create_app(
             if task:
                 await task
 
-    app = FastAPI(title="Crypto Signal Terminal", version="0.6.0", lifespan=lifespan)
+    app = FastAPI(title="Crypto Signal Terminal", version="0.7.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://127.0.0.1:1420", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost"],

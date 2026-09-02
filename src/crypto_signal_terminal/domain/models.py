@@ -123,6 +123,38 @@ class CalibrationState(FrozenModel):
     status: Literal["INSUFFICIENT", "VALIDATED", "DEGRADED"]
 
 
+class NarrativeObservation(FrozenModel):
+    """A public, attributable market opinion; never an execution instruction."""
+
+    id: str
+    source_id: str
+    source_name: str
+    source_kind: Literal["FORUM", "ANALYST", "COPY_TRADER", "NEWS"]
+    published_at: datetime
+    symbols: tuple[str, ...] = Field(min_length=1)
+    stance: Decimal = Field(ge=-1, le=1)
+    confidence: Decimal = Field(ge=0, le=1)
+    source_prior: Decimal = Field(ge=0, le=1)
+    text: str
+    url: str | None = None
+    historical_hit_rate: Decimal | None = Field(default=None, ge=0, le=1)
+    settled_calls: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_published_at(self) -> NarrativeObservation:
+        if not _is_aware(self.published_at):
+            raise ValueError("published_at must include timezone information")
+        return self
+
+
+class NarrativeAssessment(FrozenModel):
+    bias: Literal["BULLISH", "BEARISH", "NEUTRAL", "UNCONFIRMED", "UNAVAILABLE"]
+    score: Decimal = Field(ge=-1, le=1)
+    confidence: Decimal = Field(ge=0, le=1)
+    independent_sources: int = Field(ge=0)
+    sources: tuple[str, ...] = ()
+
+
 class SignalAnalysis(FrozenModel):
     opportunity_score: int = Field(ge=0, le=100)
     confidence: int = Field(ge=0, le=100)
@@ -136,6 +168,11 @@ class SignalAnalysis(FrozenModel):
     derivatives_bias: str
     order_flow_bias: str
     news_bias: str
+    asset_profile: str = "UNKNOWN"
+    model_version: str = "0.7.0"
+    narrative_bias: str = "UNAVAILABLE"
+    narrative_score: Decimal = Field(default=Decimal("0"), ge=-1, le=1)
+    narrative_sources: tuple[str, ...] = ()
     calibration: CalibrationState
     decision: SignalDecision
 

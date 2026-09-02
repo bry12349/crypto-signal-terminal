@@ -61,9 +61,18 @@ class AltcoinEngine:
             calibration=calibration,
         )
         evidence = evidence + (
+            Evidence(code="asset_model", text=f"ALT 专用权重模型 · v{analysis.model_version}", weight=0),
+            Evidence(code="btc_risk_context", text="BTC 风险环境作为山寨币方向门槛", weight=13, value=_d(snapshot, "btc_regime_score")),
             Evidence(code="tp_before_sl", text="模型估计 TP 先于 SL 的概率", weight=16, value=analysis.p_tp_before_sl),
             Evidence(code="expected_value", text="计入费用与滑点后的净期望值", weight=16, value=analysis.expected_value),
         )
+        if analysis.smart_money_bias != "UNAVAILABLE":
+            evidence += (Evidence(code="verified_wallet_flow", text=f"公开链上钱包流：{analysis.smart_money_bias}", weight=8, source="public_onchain_wallet"),)
+        if analysis.narrative_sources:
+            evidence += (Evidence(
+                code="public_narrative", text=f"{len(analysis.narrative_sources)} 个独立公开来源共识：{analysis.narrative_bias}",
+                weight=7, value=analysis.narrative_score, source=" | ".join(analysis.narrative_sources),
+            ),)
         state = LifecycleState.ENTRY_VALID if trigger_matches and cross_exchange and liquid_enough and analysis.is_tradeable else LifecycleState.ARMED
         plan = candidate_plan if state is LifecycleState.ENTRY_VALID else None
         return Opportunity(

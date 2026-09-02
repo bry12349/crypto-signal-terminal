@@ -63,21 +63,24 @@ class NarrativeEngine:
         as_of: datetime,
     ) -> NarrativeAssessment:
         profile = self.asset_profile(symbol)
-        latest_by_source: dict[str, NarrativeObservation] = {}
-        seen_text: set[str] = set()
+        candidates: dict[str, NarrativeObservation] = {}
         for item in observations:
             if symbol not in item.symbols or item.published_at > as_of:
                 continue
             if as_of - item.published_at > self._MAX_AGE[profile]:
                 continue
+            previous = candidates.get(item.source_id)
+            if previous is None or item.published_at > previous.published_at:
+                candidates[item.source_id] = item
+        latest_by_source: dict[str, NarrativeObservation] = {}
+        seen_text: set[str] = set()
+        for item in candidates.values():
             fingerprint = re.sub(r"\W+", " ", item.text.lower()).strip()
             if fingerprint and fingerprint in seen_text:
                 continue
             if fingerprint:
                 seen_text.add(fingerprint)
-            previous = latest_by_source.get(item.source_id)
-            if previous is None or item.published_at > previous.published_at:
-                latest_by_source[item.source_id] = item
+            latest_by_source[item.source_id] = item
         if not latest_by_source:
             return NarrativeAssessment(bias="UNAVAILABLE", score=ZERO, confidence=ZERO, independent_sources=0)
 

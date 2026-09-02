@@ -29,11 +29,32 @@ function matchesFilter(item: Opportunity, filter: Filter) {
   return item.source !== "SMART_MONEY" && item.symbol !== "BTCUSDT" && item.symbol !== "ETHUSDT";
 }
 
+function hasActivePlan(item: Opportunity) {
+  if (item.state !== "ENTRY_VALID" || !item.order_plan || item.analysis?.is_tradeable === false) return false;
+  const expiry = Date.parse(item.order_plan.expires_at);
+  return Number.isFinite(expiry) && expiry > Date.now();
+}
+
+function effectivePriority(item: Opportunity) {
+  if (item.state !== "ENTRY_VALID" || hasActivePlan(item)) return priority[item.state];
+  const expiry = item.order_plan ? Date.parse(item.order_plan.expires_at) : Number.NaN;
+  if (item.order_plan && (!Number.isFinite(expiry) || expiry <= Date.now())) return priority.EXPIRED;
+  return item.analysis?.is_tradeable === false ? priority.INVALIDATED : priority.ARMED;
+}
+
+function visibleState(item: Opportunity) {
+  if (item.state !== "ENTRY_VALID") return labels[item.state];
+  const expiry = item.order_plan ? Date.parse(item.order_plan.expires_at) : Number.NaN;
+  if (item.order_plan && (!Number.isFinite(expiry) || expiry <= Date.now())) return "已过期";
+  if (item.analysis?.is_tradeable === false) return "风控锁定";
+  if (!item.order_plan) return "参数未就绪";
+  return "可入场";
+}
+
 function compareSignalQuality(a: Opportunity, b: Opportunity) {
-  const actionable = (item: Opportunity) => Number(item.state === "ENTRY_VALID" && item.order_plan !== null && item.analysis?.is_tradeable === true);
+  const actionable = (item: Opportunity) => Number(hasActivePlan(item) && item.analysis?.is_tradeable === true);
   return actionable(b) - actionable(a)
-    || Number(b.analysis?.is_tradeable === true) - Number(a.analysis?.is_tradeable === true)
-    || priority[a.state] - priority[b.state]
+    || effectivePriority(a) - effectivePriority(b)
     || Number(b.analysis?.expected_value ?? -1) - Number(a.analysis?.expected_value ?? -1)
     || Number(b.analysis?.p_tp_before_sl ?? 0) - Number(a.analysis?.p_tp_before_sl ?? 0)
     || Number(b.analysis?.opportunity_score ?? 0) - Number(a.analysis?.opportunity_score ?? 0)
@@ -43,16 +64,18 @@ function compareSignalQuality(a: Opportunity, b: Opportunity) {
 export function OpportunityStream({ items, selectedId, onSelect }: { items: Opportunity[]; selectedId: string | null; onSelect: (id: string) => void }) {
   const [filter, setFilter] = useState<Filter>("全部");
   const sorted = useMemo(() => items.filter((item) => matchesFilter(item, filter)).sort(compareSignalQuality), [items, filter]);
-  const best = useMemo(() => [...items].sort(compareSignalQuality).find((item) => item.state === "ENTRY_VALID" && item.analysis?.is_tradeable), [items]);
+  const best = useMemo(() => [...items].sort(compareSignalQuality).find((item) => hasActivePlan(item) && item.analysis?.is_tradeable === true), [items]);
   return <aside className="opportunity-rail">
     <div className="rail-heading"><div><span className="eyebrow">LIVE RADAR</span><h2>机会流</h2></div><div className="rail-actions">{best && <button type="button" aria-label="查看最佳信号" onClick={() => { setFilter("全部"); onSelect(best.id); }}>最佳信号</button>}<span className="count-badge">{sorted.length}</span></div></div>
     <div className="filter-row">{filters.map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value}</button>)}</div>
     <div className="opportunity-list">
       {sorted.length === 0 && <div className="empty-state"><RadioTower size={22} /><strong>当前无可执行机会</strong><span>系统正在等待高质量结构</span></div>}
       {sorted.map((item) => {
-        const direction = item.order_plan?.direction;
+        const active = hasActivePlan(item);
+        const direction = active ? item.order_plan?.direction : undefined;
+        const stateLabel = visibleState(item);
         return <button type="button" key={item.id} data-testid="opportunity" className={`opportunity-card ${selectedId === item.id ? "selected" : ""} ${direction?.toLowerCase() ?? "neutral"}`} onClick={() => onSelect(item.id)}>
-          <div className="card-topline"><span className="source-tag"><SourceIcon source={item.source} />{item.source === "SMART_MONEY" ? "聪明钱" : "原生"}</span><span className="state-label"><i className={`state-dot ${item.state.toLowerCase()}`} />{labels[item.state]}</span></div>
+          <div className="card-topline"><span className="source-tag"><SourceIcon source={item.source} />{item.source === "SMART_MONEY" ? "聪明钱" : "原生"}</span><span className="state-label"><i className={`state-dot ${active ? "entry_valid" : item.state.toLowerCase()}`} />{stateLabel}</span></div>
           <div className="symbol-line"><strong>{item.symbol.replace("USDT", "")}</strong><span className="contract-label">USDT PERP</span><em>{item.confidence}</em></div>
           <div className="card-title">{item.title ?? "市场结构机会"}</div>
           <div className="micro-evidence">{item.evidence[0]?.text ?? "等待更多确认"}</div>

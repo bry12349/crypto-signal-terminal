@@ -1,9 +1,17 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OpportunityStream } from "./OpportunityStream";
+import { demoSnapshot } from "../demo";
 import type { Opportunity } from "../types";
 
+const activePlan = {
+  direction: "LONG" as const,
+  order_type: "LIMIT" as const,
+  entry_low: "140", entry_high: "141", stop: "138", targets: ["145", "148"], target_allocations: ["0.5", "0.5"],
+  expires_at: "2099-01-01T00:00:00Z", max_slippage_bps: "8", suggested_quantity: "1", risk_amount: "25", reward_to_risk: "2",
+  invalidation: "5m close below 138", estimated_fees: "1",
+};
 
 const items: Opportunity[] = [
   {
@@ -30,12 +38,14 @@ const items: Opportunity[] = [
     source_label: "Alpha Channel",
     updated_at: "2026-08-01T08:00:01Z",
     evidence: [],
-    order_plan: null,
+    order_plan: activePlan,
   },
 ];
 
 
 describe("OpportunityStream", () => {
+  afterEach(cleanup);
+
   it("sorts entry-valid confirmations ahead of forming signals", () => {
     render(<OpportunityStream items={items} selectedId={null} onSelect={() => undefined} />);
     const cards = screen.getAllByTestId("opportunity");
@@ -77,5 +87,20 @@ describe("OpportunityStream", () => {
     fireEvent.click(within(view.container).getByRole("button", { name: "查看最佳信号" }));
 
     expect(onSelect).toHaveBeenCalledWith("entry");
+  });
+
+  it("does not advertise an expired plan as ready to enter", () => {
+    const current = demoSnapshot.opportunities[0];
+    const expired = { ...current, analysis: {
+      opportunity_score: 80, confidence: 80, p_tp_before_sl: "0.64", expected_value: "0.22", evidence_conflict: "0.10", is_tradeable: true,
+      market_regime: "TREND", signal_type: "trend_continuation", smart_money_bias: "UNAVAILABLE", derivatives_bias: "BULLISH", order_flow_bias: "BULLISH", news_bias: "UNAVAILABLE",
+    }, order_plan: { ...current.order_plan!, expires_at: "2024-01-01T00:00:00Z" } };
+
+    const view = render(<OpportunityStream items={[expired, items[0]]} selectedId={expired.id} onSelect={() => undefined} />);
+
+    const cards = within(view.container).getAllByTestId("opportunity");
+    expect(cards[0]).toHaveTextContent("DOGE");
+    expect(cards[1]).toHaveTextContent("已过期");
+    expect(screen.queryByRole("button", { name: "查看最佳信号" })).not.toBeInTheDocument();
   });
 });

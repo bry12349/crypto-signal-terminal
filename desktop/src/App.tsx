@@ -25,7 +25,7 @@ export default function App() {
       const index = Math.max(0, opportunities.findIndex((item) => item.id === selectedId));
       if (event.key.toLowerCase() === "j") select(opportunities[Math.min(opportunities.length - 1, index + 1)].id);
       if (event.key.toLowerCase() === "k") select(opportunities[Math.max(0, index - 1)].id);
-      if (event.key === "Enter" && selected?.order_plan) window.dispatchEvent(new Event("prepare-order"));
+      if (event.key === "Enter" && selected?.order_plan && selected.state === "ENTRY_VALID" && selected.analysis?.is_tradeable !== false) window.dispatchEvent(new Event("prepare-order"));
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -51,7 +51,7 @@ export default function App() {
         />
         <OrderTicket opportunity={selected} />
       </div>
-      <footer className="shortcut-bar"><span><kbd>J</kbd><kbd>K</kbd> 切换机会</span><span><kbd>Space</kbd> 展开证据</span><span><kbd>Enter</kbd> 准备订单</span><strong>只在结构完整时发出信号</strong></footer>
+      <footer className="shortcut-bar"><span><kbd>J</kbd><kbd>K</kbd> 切换机会</span><span><kbd>Enter</kbd> 准备订单</span><strong>只在结构完整时发出信号</strong></footer>
     </div>
   );
 }

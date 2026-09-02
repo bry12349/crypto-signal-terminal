@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,7 +18,7 @@ vi.mock("lightweight-charts", () => ({
   },
 }));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 import { demoSnapshot } from "../demo";
 import { SignalCanvas } from "./SignalCanvas";
@@ -72,6 +72,19 @@ describe("SignalCanvas", () => {
     />);
     expect(screen.getByText("观察强度")).toBeVisible();
     expect(screen.getByText("实时市场观察 · 等待触发")).toBeVisible();
+  });
+
+  it("does not show a stale direction when the execution window has expired", () => {
+    const current = demoSnapshot.opportunities[0];
+    const view = render(<SignalCanvas
+      selected={{ ...current, order_plan: { ...current.order_plan!, expires_at: "2024-01-01T00:00:00Z" } }}
+      mode="live"
+      candles={[]}
+      health={{ symbol: "BTCUSDT", status: "healthy", observed_at: new Date().toISOString(), latency_ms: 20, reason: null }}
+    />);
+
+    expect(within(view.container).getByText("NO TRADE")).toBeVisible();
+    expect(within(view.container).getByText("信号已过期")).toBeVisible();
   });
 
   it("gives an on-chain wallet card an explicit flow detail and market benchmark", () => {

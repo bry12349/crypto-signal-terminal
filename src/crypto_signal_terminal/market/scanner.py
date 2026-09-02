@@ -16,15 +16,19 @@ from crypto_signal_terminal.domain.models import (
     SmartMoneyKind,
     SourceKind,
     NarrativeObservation,
+    AssetClass,
 )
 from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
 from crypto_signal_terminal.engines.evidence_fusion import EvidenceFusion
 from crypto_signal_terminal.engines.narrative import NarrativeEngine
+from crypto_signal_terminal.engines.commodity import CommodityEngine
+from crypto_signal_terminal.engines.equity import EquityEngine
 from crypto_signal_terminal.engines.signal_ledger import SignalRecord, settle_signal
 from crypto_signal_terminal.cycle import CycleState, cycle_state_at
 from crypto_signal_terminal.market.health import classify_market_error
+from crypto_signal_terminal.market.instruments import asset_class_for_symbol
 from crypto_signal_terminal.storage import AuditStore
 
 
@@ -165,6 +169,8 @@ class LiveMarketScanner:
         self._active_strategy_ids: set[str] = set()
         self.trend = TrendEngine()
         self.altcoin = AltcoinEngine()
+        self.commodity = CommodityEngine()
+        self.equity = EquityEngine()
         self.smart = SmartMoneyEngine()
         self.narrative = NarrativeEngine()
         self.state.market_health_registry.set_watchlist(watchlist)
@@ -305,6 +311,10 @@ class LiveMarketScanner:
         cycle: CycleState | None,
     ) -> list[MarketSnapshot]:
         btc_regime = self._btc_regime(snapshots)
+        index_regime = Decimal("0")
+        index_snapshot = next((item for item in snapshots if item.symbol in {"SPXUSDT", "NQUSDT"} and item.asset_class is AssetClass.US_EQUITY), None)
+        if index_snapshot is not None:
+            index_regime = Decimal(str(index_snapshot.features.get("trend_strength_4h", index_snapshot.features.get("trend_4h", 0))))
         wallet_by_symbol: dict[str, list[SmartMoneyCandidate]] = {}
         for candidate in wallet_candidates:
             market_symbol = candidate.symbol if candidate.symbol.endswith("USDT") else f"{candidate.symbol}USDT"
@@ -313,6 +323,8 @@ class LiveMarketScanner:
         for snapshot in snapshots:
             features = dict(snapshot.features)
             features["btc_regime_score"] = str(btc_regime.quantize(Decimal("0.001")))
+            if snapshot.asset_class is AssetClass.US_EQUITY:
+                features["index_regime"] = str(index_regime.quantize(Decimal("0.001")))
             if cycle is not None:
                 features["btc_cycle_bias"] = "1" if cycle.market_bias == "BULLISH" else "-1"
                 features["btc_cycle_phase"] = cycle.phase
@@ -342,7 +354,10 @@ class LiveMarketScanner:
             try:
                 altcoins = await self.universe.top_altcoins()
                 if altcoins:
-                    self.watchlist = DEFAULT_WATCHLIST + tuple(item for item in altcoins if item not in DEFAULT_WATCHLIST)[:10]
+                    tradfi = tuple(item for item in self.watchlist if asset_class_for_symbol(item) is not AssetClass.CRYPTO and item not in altcoins)
+                    # Refresh only the crypto altcoin slice; configured TradFi
+                    # contracts must survive every hot-universe refresh.
+                    self.watchlist = DEFAULT_WATCHLIST + tuple(item for item in altcoins if item not in DEFAULT_WATCHLIST)[:10] + tradfi
                     self.state.market_health_registry.set_watchlist(self.watchlist)
             except Exception:
                 # Retain the last successful universe instead of fabricating a static hot list.
@@ -387,7 +402,11 @@ class LiveMarketScanner:
         smart_money = []
         for snapshot in snapshots:
             self.state.market_candles[snapshot.symbol] = [item.model_dump(mode="json") for item in snapshot.candles]
-            if snapshot.symbol in {"BTCUSDT", "ETHUSDT"}:
+            if snapshot.asset_class is AssetClass.COMMODITY:
+                opportunity = self.commodity.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("commodity_macro", direction, snapshot.symbol))
+            elif snapshot.asset_class is AssetClass.US_EQUITY:
+                opportunity = self.equity.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("equity_relative_strength", direction, snapshot.symbol))
+            elif snapshot.symbol in {"BTCUSDT", "ETHUSDT"}:
                 opportunity = self.trend.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("trend_continuation", direction, snapshot.symbol))
             else:
                 opportunity = self.altcoin.evaluate(snapshot, calibration_for_direction=lambda direction: self._calibration_state("volatility_expansion", direction, snapshot.symbol))

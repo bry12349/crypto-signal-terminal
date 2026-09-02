@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from crypto_signal_terminal.domain.models import Direction, MarketSnapshot, OrderPlan, OrderType
+from crypto_signal_terminal.domain.models import AssetClass, Direction, MarketSnapshot, OrderPlan, OrderType
 
 
 def basic_order_plan(
@@ -15,10 +15,15 @@ def basic_order_plan(
     max_slippage_bps: Decimal = Decimal("10"),
 ) -> OrderPlan:
     price = snapshot.price
-    profile = "BTC" if snapshot.symbol == "BTCUSDT" else "ETH" if snapshot.symbol == "ETHUSDT" else "ALT"
-    defaults = {"BTC": Decimal("0.006"), "ETH": Decimal("0.008"), "ALT": Decimal("0.012")}
-    floors = {"BTC": Decimal("0.0035"), "ETH": Decimal("0.005"), "ALT": Decimal("0.008")}
-    ceilings = {"BTC": Decimal("0.018"), "ETH": Decimal("0.022"), "ALT": Decimal("0.035")}
+    if snapshot.asset_class is AssetClass.COMMODITY:
+        profile = "COMMODITY"
+    elif snapshot.asset_class is AssetClass.US_EQUITY:
+        profile = "US_EQUITY"
+    else:
+        profile = "BTC" if snapshot.symbol == "BTCUSDT" else "ETH" if snapshot.symbol == "ETHUSDT" else "ALT"
+    defaults = {"BTC": Decimal("0.006"), "ETH": Decimal("0.008"), "ALT": Decimal("0.012"), "COMMODITY": Decimal("0.010"), "US_EQUITY": Decimal("0.014")}
+    floors = {"BTC": Decimal("0.0035"), "ETH": Decimal("0.005"), "ALT": Decimal("0.008"), "COMMODITY": Decimal("0.004"), "US_EQUITY": Decimal("0.006")}
+    ceilings = {"BTC": Decimal("0.018"), "ETH": Decimal("0.022"), "ALT": Decimal("0.035"), "COMMODITY": Decimal("0.030"), "US_EQUITY": Decimal("0.040")}
     atr_ratio = Decimal(str(snapshot.features.get("atr_ratio", "0")))
     distance_ratio = defaults[profile] if atr_ratio <= 0 else max(floors[profile], min(ceilings[profile], atr_ratio * Decimal("1.2")))
     distance = max(price * distance_ratio, Decimal("0.000001"))

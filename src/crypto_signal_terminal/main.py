@@ -19,7 +19,8 @@ from crypto_signal_terminal.engines.altcoin import AltcoinEngine
 from crypto_signal_terminal.engines.smart_money import SmartMoneyEngine
 from crypto_signal_terminal.engines.trend import TrendEngine
 from crypto_signal_terminal.market.live import BybitCompositeMarketClient
-from crypto_signal_terminal.market.scanner import LiveMarketScanner
+from crypto_signal_terminal.market.scanner import DEFAULT_WATCHLIST, LiveMarketScanner
+from crypto_signal_terminal.market.instruments import DEFAULT_COMMODITY_WATCHLIST, DEFAULT_US_EQUITY_WATCHLIST
 from crypto_signal_terminal.market.universe import MajorExchangeHotUniverse
 from crypto_signal_terminal.storage import AuditStore
 
@@ -74,6 +75,19 @@ def build_demo_state() -> ApplicationState:
 
 def build_live_state() -> ApplicationState:
     return ApplicationState(mode="live", market_health="connecting")
+
+
+def configured_watchlist() -> tuple[str, ...]:
+    """Keep the core crypto list first, then Bybit TradFi contracts.
+
+    CST_TRADFI_SYMBOLS can replace the conservative defaults with symbols
+    enabled for the user's region/account. No unavailable contract is faked;
+    its health entry remains visible when the public venue does not serve it.
+    """
+    raw = os.getenv("CST_TRADFI_SYMBOLS", "")
+    custom = tuple(item.strip().upper().replace("/", "") for item in raw.split(",") if item.strip())
+    tradfi = custom or DEFAULT_COMMODITY_WATCHLIST + DEFAULT_US_EQUITY_WATCHLIST
+    return tuple(dict.fromkeys(DEFAULT_WATCHLIST + tradfi))
 
 
 def run_demo_replay() -> tuple[str, ...]:
@@ -131,6 +145,7 @@ def run() -> None:
     scanner = LiveMarketScanner(
         state=state,
         market=live_market,
+        watchlist=configured_watchlist(),
         universe=hot_universe,
         audit_store=store,
         wallet_tracker=wallet_tracker,

@@ -21,6 +21,14 @@ class Direction(StrEnum):
     SHORT = "SHORT"
 
 
+class AssetClass(StrEnum):
+    """Market family; each family is evaluated by an isolated model."""
+
+    CRYPTO = "CRYPTO"
+    COMMODITY = "COMMODITY"
+    US_EQUITY = "US_EQUITY"
+
+
 class OrderType(StrEnum):
     MARKET = "MARKET"
     LIMIT = "LIMIT"
@@ -242,6 +250,7 @@ class Candle(FrozenModel):
 
 class MarketSnapshot(FrozenModel):
     symbol: str
+    asset_class: AssetClass = AssetClass.CRYPTO
     exchange: str
     observed_at: datetime
     price: Decimal = Field(gt=0)

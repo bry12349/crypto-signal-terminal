@@ -51,6 +51,13 @@ function visibleState(item: Opportunity) {
   return "可入场";
 }
 
+function contractLabel(item: Opportunity) {
+  const profile = item.analysis?.asset_profile;
+  if (profile === "COMMODITY") return "COMMODITY PERP";
+  if (profile === "US_EQUITY") return "US STOCK PERP";
+  return "USDT PERP";
+}
+
 function compareSignalQuality(a: Opportunity, b: Opportunity) {
   const actionable = (item: Opportunity) => Number(hasActivePlan(item) && item.analysis?.is_tradeable === true);
   return actionable(b) - actionable(a)
@@ -76,7 +83,7 @@ export function OpportunityStream({ items, selectedId, onSelect }: { items: Oppo
         const stateLabel = visibleState(item);
         return <button type="button" key={item.id} data-testid="opportunity" className={`opportunity-card ${selectedId === item.id ? "selected" : ""} ${direction?.toLowerCase() ?? "neutral"}`} onClick={() => onSelect(item.id)}>
           <div className="card-topline"><span className="source-tag"><SourceIcon source={item.source} />{item.source === "SMART_MONEY" ? "聪明钱" : "原生"}</span><span className="state-label"><i className={`state-dot ${active ? "entry_valid" : item.state.toLowerCase()}`} />{stateLabel}</span></div>
-          <div className="symbol-line"><strong>{item.symbol.replace("USDT", "")}</strong><span className="contract-label">USDT PERP</span><em>{item.confidence}</em></div>
+          <div className="symbol-line"><strong>{item.symbol.replace("USDT", "")}</strong><span className="contract-label">{contractLabel(item)}</span><em>{item.confidence}</em></div>
           <div className="card-title">{item.title ?? "市场结构机会"}</div>
           <div className="micro-evidence">{item.evidence[0]?.text ?? "等待更多确认"}</div>
           <div className="confidence-track"><i style={{ width: `${item.confidence}%` }} /></div>

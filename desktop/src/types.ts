@@ -47,7 +47,7 @@ export interface SignalAnalysis {
   derivatives_bias: string;
   order_flow_bias: string;
   news_bias: string;
-  asset_profile?: "BTC" | "ETH" | "ALT" | "UNKNOWN";
+  asset_profile?: "BTC" | "ETH" | "ALT" | "COMMODITY" | "US_EQUITY" | "UNKNOWN";
   model_version?: string;
   narrative_bias?: string;
   narrative_score?: string;

@@ -7,7 +7,8 @@ from decimal import Decimal
 
 import httpx
 
-from crypto_signal_terminal.domain.models import Candle, DataHealth, MarketSnapshot
+from crypto_signal_terminal.domain.models import AssetClass, Candle, DataHealth, MarketSnapshot
+from crypto_signal_terminal.market.instruments import asset_class_for_symbol, normalize_symbol
 
 
 def _d(value: object, default: str = "0") -> Decimal:
@@ -93,7 +94,8 @@ class BybitCompositeMarketClient:
         return payload["result"], int(payload["time"]) if payload.get("time") else None
 
     async def snapshot(self, symbol: str) -> MarketSnapshot:
-        normalized = symbol.upper().replace("/", "").replace("-", "")
+        normalized = normalize_symbol(symbol)
+        asset_class = asset_class_for_symbol(normalized)
         client = self.client
         started = self.clock()
         try:
@@ -111,7 +113,7 @@ class BybitCompositeMarketClient:
             received_at = self.clock()
             observed = datetime.fromtimestamp(ticker_time / 1000, tz=UTC) if ticker_time else received_at
             ticker_item = ticker["list"][0]
-            features = self._features(candles_4h["list"], candles_1h["list"], candles_15m["list"], candles_5m["list"], book, trades["list"], oi["list"])
+            features = self._features(candles_4h["list"], candles_1h["list"], candles_15m["list"], candles_5m["list"], book, trades["list"], oi["list"], asset_class=asset_class)
             candle_rows = tuple(
                 Candle(
                     timestamp=int(row[0]) // 1000,
@@ -120,12 +122,21 @@ class BybitCompositeMarketClient:
                 for row in reversed(candles_5m["list"])
             )
             price = _d(ticker_item["lastPrice"])
+            index_price = _d(ticker_item.get("indexPrice"))
+            if asset_class is AssetClass.COMMODITY and index_price > 0:
+                # A bounded mark/index premium is the observable proxy for
+                # commodity carry/term structure; it is not crypto funding.
+                basis = max(Decimal("-1"), min(Decimal("1"), (price - index_price) / price * Decimal("100")))
+                features["term_structure_score"] = str(basis.quantize(Decimal("0.0001")))
             latency_ms = max(0, int((received_at - started).total_seconds() * 1000))
             source_age_ms = max(0, int((received_at - observed).total_seconds() * 1000))
             healthy = latency_ms <= 5000 and source_age_ms <= 10000
-            peer_confirmations = 1 + (await self._okx_price_confirms(normalized, price) if self.include_peers else 0)
+            oracle_price = _d(ticker_item.get("indexPrice"))
+            oracle_confirm = int(oracle_price > 0 and abs(price - oracle_price) / price <= Decimal("0.01"))
+            peer_confirmations = 1 + max(oracle_confirm, await self._okx_price_confirms(normalized, price) if self.include_peers else 0)
             return MarketSnapshot(
                 symbol=normalized,
+                asset_class=asset_class,
                 exchange="bybit-public-composite",
                 observed_at=observed,
                 price=price,
@@ -151,6 +162,8 @@ class BybitCompositeMarketClient:
             pass
 
     async def _binance_snapshot(self, symbol: str, started: datetime) -> MarketSnapshot:
+        if asset_class_for_symbol(symbol) is not AssetClass.CRYPTO:
+            raise RuntimeError("tradfi_contract_unavailable_on_binance_fallback")
         client = self._binance_client
         ticker, four, hour, fifteen, five, book, trades, oi, oi_history = await asyncio.gather(
             client.get("/fapi/v1/ticker/24hr", params={"symbol": symbol}),
@@ -172,9 +185,9 @@ class BybitCompositeMarketClient:
         # Binance returns historical OI in chronological order; feature fusion
         # expects the most recent value first, matching the Bybit response.
         oi_rows = [{"openInterest": item.get("sumOpenInterest", "0")} for item in reversed(oi_history.json())]
-        features = self._features(candle_rows(four), candle_rows(hour), candle_rows(fifteen), candle_rows(five), {"b": book_data["bids"], "a": book_data["asks"]}, trade_rows, oi_rows)
+        features = self._features(candle_rows(four), candle_rows(hour), candle_rows(fifteen), candle_rows(five), {"b": book_data["bids"], "a": book_data["asks"]}, trade_rows, oi_rows, asset_class=AssetClass.CRYPTO)
         values = candle_rows(five)
-        return MarketSnapshot(symbol=symbol, exchange="binance-public-composite", observed_at=received_at, price=price, bid=_d(ticker_item["bidPrice"]), ask=_d(ticker_item["askPrice"]), open_interest=_d(oi_value), funding_rate=_d(ticker_item.get("lastFundingRate")), volume_24h=_d(ticker_item.get("quoteVolume")), data_health=DataHealth(healthy=True, observed_at=received_at, latency_ms=max(0, int((received_at - started).total_seconds() * 1000))), peer_confirmations=1, features=features, candles=tuple(Candle(timestamp=int(row[0]) // 1000, open=_d(row[1]), high=_d(row[2]), low=_d(row[3]), close=_d(row[4]), volume=_d(row[5])) for row in values))
+        return MarketSnapshot(symbol=symbol, asset_class=AssetClass.CRYPTO, exchange="binance-public-composite", observed_at=received_at, price=price, bid=_d(ticker_item["bidPrice"]), ask=_d(ticker_item["askPrice"]), open_interest=_d(oi_value), funding_rate=_d(ticker_item.get("lastFundingRate")), volume_24h=_d(ticker_item.get("quoteVolume")), data_health=DataHealth(healthy=True, observed_at=received_at, latency_ms=max(0, int((received_at - started).total_seconds() * 1000))), peer_confirmations=1, features=features, candles=tuple(Candle(timestamp=int(row[0]) // 1000, open=_d(row[1]), high=_d(row[2]), low=_d(row[3]), close=_d(row[4]), volume=_d(row[5])) for row in values))
 
     async def candles(self, symbol: str, interval: str, limit: int = 300) -> tuple[Candle, ...]:
         normalized = symbol.upper().replace("/", "").replace("-", "")
@@ -247,7 +260,7 @@ class BybitCompositeMarketClient:
             await self._binance_client.aclose()
 
     @staticmethod
-    def _features(candles_4h: list, candles_1h: list, candles_15m: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict]) -> dict[str, str | int]:
+    def _features(candles_4h: list, candles_1h: list, candles_15m: list, candles_5m: list, book: dict, trades: list[dict], oi_rows: list[dict], *, asset_class: AssetClass = AssetClass.CRYPTO) -> dict[str, str | int]:
         four = list(reversed(candles_4h))[:-1]
         hour = list(reversed(candles_1h))[:-1]
         fifteen = list(reversed(candles_15m))[:-1]
@@ -305,7 +318,7 @@ class BybitCompositeMarketClient:
         spread_bps = (best_ask - best_bid) / mid * Decimal("10000") if mid > 0 else Decimal("9999")
         recent_ranges = ranges[-14:]
         atr_ratio = (sum(recent_ranges, Decimal("0")) / Decimal(len(recent_ranges)) / five_closes[-1]) if recent_ranges and five_closes[-1] else Decimal("0")
-        return {
+        result: dict[str, str | int] = {
             "trend_4h": _sign(strength_4h, Decimal("0.08")),
             "trend_1h": _sign(strength_1h, Decimal("0.08")),
             "setup_15m": _sign(strength_15m, Decimal("0.08")),
@@ -328,3 +341,28 @@ class BybitCompositeMarketClient:
             "spread_bps": str(spread_bps.quantize(Decimal("0.01"))),
             "atr_ratio": str(atr_ratio.quantize(Decimal("0.000001"))),
         }
+        if asset_class is AssetClass.COMMODITY:
+            # TradFi contracts do not share crypto's funding/OI interpretation.
+            # These fields are price/volume-derived inputs for the commodity
+            # model; macro event risk remains deliberately conservative until
+            # a calendar feed confirms it.
+            commodity_liquidity = max(Decimal("0"), min(Decimal("1"), (Decimal("1") - spread_bps / Decimal("20")) * min(Decimal("1"), volume_acceleration / Decimal("1.5"))))
+            result.update({
+                "trend_1d": str(_trend_strength(four_closes, 24).quantize(Decimal("0.0001"))),
+                "macro_score": str((strength_4h * Decimal("0.70") + strength_1h * Decimal("0.30")).quantize(Decimal("0.0001"))),
+                "term_structure_score": "0",
+                "commodity_flow": str(flow.quantize(Decimal("0.0001"))),
+                "session_liquidity": str(commodity_liquidity.quantize(Decimal("0.0001"))),
+                "event_risk": "0.25",
+            })
+        elif asset_class is AssetClass.US_EQUITY:
+            equity_liquidity = max(Decimal("0"), min(Decimal("1"), (Decimal("1") - spread_bps / Decimal("12")) * min(Decimal("1"), volume_acceleration / Decimal("1.25"))))
+            result.update({
+                "trend_1d": str(_trend_strength(four_closes, 24).quantize(Decimal("0.0001"))),
+                "relative_strength": str(strength_1h.quantize(Decimal("0.0001"))),
+                "equity_flow": str(flow.quantize(Decimal("0.0001"))),
+                "session_liquidity": str(equity_liquidity.quantize(Decimal("0.0001"))),
+                "earnings_risk": "0.25",
+                "gap_risk": "0.35",
+            })
+        return result

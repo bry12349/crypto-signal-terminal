@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from crypto_signal_terminal.domain.models import CalibrationState, DecisionGate, Direction, MarketSnapshot, SignalAnalysis, SignalDecision
+from crypto_signal_terminal.domain.models import AssetClass, CalibrationState, DecisionGate, Direction, MarketSnapshot, SignalAnalysis, SignalDecision
 
 
 ZERO = Decimal("0")
@@ -78,8 +78,10 @@ class EvidenceFusion:
         "ALT": (Decimal("0.60"), Decimal("68"), Decimal("1.35"), Decimal("0.24")),
     }
 
-    def evaluate(self, snapshot: MarketSnapshot, *, direction: Direction, reward_to_risk: Decimal, signal_type: str, calibration: CalibrationState | None = None) -> SignalAnalysis:
-        profile = asset_profile(snapshot.symbol)
+    def evaluate(self, snapshot: MarketSnapshot, *, direction: Direction, reward_to_risk: Decimal, signal_type: str, calibration: CalibrationState | None = None, profile_override: str | None = None) -> SignalAnalysis:
+        profile = profile_override or (snapshot.asset_class.value if snapshot.asset_class is not AssetClass.CRYPTO else asset_profile(snapshot.symbol))
+        if profile in {"COMMODITY", "US_EQUITY"}:
+            return self._evaluate_tradfi(snapshot, profile=profile, direction=direction, reward_to_risk=reward_to_risk, signal_type=signal_type, calibration=calibration)
         trend = self._trend(snapshot, profile)
         flow = self._flow(snapshot)
         derivatives = self._derivatives(snapshot, trend)
@@ -150,6 +152,104 @@ class EvidenceFusion:
             asset_profile=profile, model_version=MODEL_VERSION, narrative_bias=narrative_bias,
             narrative_score=(narrative or ZERO).quantize(Decimal("0.001")), narrative_sources=narrative_sources,
             calibration=calibration, decision=SignalDecision(outcome="TRADE" if tradeable else "NO_TRADE", gates=tuple(gates)),
+        )
+
+    def _evaluate_tradfi(
+        self,
+        snapshot: MarketSnapshot,
+        *,
+        profile: str,
+        direction: Direction,
+        reward_to_risk: Decimal,
+        signal_type: str,
+        calibration: CalibrationState | None,
+    ) -> SignalAnalysis:
+        """Independent fusion for Bybit TradFi perpetuals.
+
+        Commodities and US equities deliberately use no crypto funding/OI
+        factor. Their probability is driven by the model-specific feature
+        contract emitted by the TradFi adapter and is blocked when market
+        session, event, or liquidity quality is not verifiable.
+        """
+        def value(key: str, default: str = "0") -> Decimal:
+            return _d(snapshot, key, default)
+
+        side = ONE if direction is Direction.LONG else Decimal("-1")
+        if profile == "COMMODITY":
+            trend = _signed(value("trend_1d") * Decimal("0.35") + value("trend_4h") * Decimal("0.35") + value("trend_1h") * Decimal("0.20") + value("trigger_5m") * Decimal("0.10"))
+            macro = _signed(value("macro_score"))
+            term = _signed(value("term_structure_score"))
+            flow = _signed(value("commodity_flow", str(value("aggressive_flow_imbalance"))))
+            volatility = _clip(ONE - abs(value("atr_percentile", "50") - Decimal("50")) / Decimal("50"))
+            event_risk = _clip(value("event_risk"))
+            liquidity = _clip(value("session_liquidity", "1"))
+            weights = ((trend, Decimal("0.32")), (macro, Decimal("0.24")), (term, Decimal("0.16")), (flow, Decimal("0.12")), (volatility * side, Decimal("0.08")), ((ONE - event_risk) * liquidity, Decimal("0.08")))
+            model_version = "0.8.0-commodity"
+            market_regime = "MACRO_TREND" if abs(trend) >= Decimal("0.55") else "MACRO_RANGE"
+            quality = max(value("spread_bps") / Decimal("8"), value("slippage_bps_1000") / Decimal("8"), (ONE - liquidity))
+            extra = [
+                DecisionGate(key="commodity_session", label="商品交易时段与流动性", passed=liquidity >= Decimal("0.55"), observed=liquidity, required=Decimal("0.55")),
+                DecisionGate(key="commodity_event_risk", label="宏观事件风险可控", passed=event_risk <= Decimal("0.45"), observed=event_risk, required=Decimal("0.45")),
+                DecisionGate(key="commodity_market_quality", label="商品点差与滑点", passed=quality <= ONE, observed=quality, required=ONE),
+            ]
+            raw = Decimal("0.27") + sum((weight * max(ZERO, side * factor) for factor, weight in weights), ZERO) * Decimal("0.52") + sum((weight for factor, weight in weights if side * factor > Decimal("0.18")), ZERO) * Decimal("0.08")
+            conflict = min(sum((weight * max(ZERO, side * factor * Decimal("-1")) for factor, weight in weights), ZERO), sum((weight * max(ZERO, side * factor) for factor, weight in weights), ZERO)) / max(sum((weight * abs(factor) for factor, weight in weights), ZERO), Decimal("0.0001"))
+            derivatives = term
+            flow_bias = flow
+            smart_bias = "UNAVAILABLE"
+        else:
+            trend = _signed(value("trend_4h") * Decimal("0.40") + value("trend_1h") * Decimal("0.30") + value("trigger_5m") * Decimal("0.12") + value("relative_strength") * Decimal("0.18"))
+            market = _signed(value("index_regime"))
+            relative = _signed(value("relative_strength"))
+            flow = _signed(value("equity_flow", str(value("aggressive_flow_imbalance"))))
+            volatility = _clip(ONE - abs(value("atr_percentile", "50") - Decimal("50")) / Decimal("50"))
+            session = _clip(value("session_liquidity", "1"))
+            weights = ((trend, Decimal("0.28")), (market, Decimal("0.22")), (relative, Decimal("0.20")), (flow, Decimal("0.14")), (volatility * side, Decimal("0.08")), (session, Decimal("0.08")))
+            model_version = "0.8.0-us-equity"
+            market_regime = "INDEX_TREND" if abs(market) >= Decimal("0.55") else "INDEX_RANGE"
+            earnings_risk = _clip(value("earnings_risk"))
+            gap_risk = _clip(value("gap_risk"))
+            quality = max(value("spread_bps") / Decimal("5"), value("slippage_bps_1000") / Decimal("6"), (ONE - session))
+            extra = [
+                DecisionGate(key="equity_session", label="美股合约流动性时段", passed=session >= Decimal("0.55"), observed=session, required=Decimal("0.55")),
+                DecisionGate(key="earnings_risk", label="财报事件风险可控", passed=earnings_risk <= Decimal("0.45"), observed=earnings_risk, required=Decimal("0.45")),
+                DecisionGate(key="gap_risk", label="开盘跳空风险可控", passed=gap_risk <= Decimal("0.60"), observed=gap_risk, required=Decimal("0.60")),
+                DecisionGate(key="equity_market_quality", label="股票点差与滑点", passed=quality <= ONE, observed=quality, required=ONE),
+            ]
+            raw = Decimal("0.27") + sum((weight * max(ZERO, side * factor) for factor, weight in weights), ZERO) * Decimal("0.52") + sum((weight for factor, weight in weights if side * factor > Decimal("0.18")), ZERO) * Decimal("0.08")
+            conflict = min(sum((weight * max(ZERO, side * factor * Decimal("-1")) for factor, weight in weights), ZERO), sum((weight * max(ZERO, side * factor) for factor, weight in weights), ZERO)) / max(sum((weight * abs(factor) for factor, weight in weights), ZERO), Decimal("0.0001"))
+            derivatives = market
+            flow_bias = flow
+            smart_bias = "UNAVAILABLE"
+
+        calibration = calibration or CalibrationState(settled=0, mean_predicted=ZERO, observed_win_rate=ZERO, absolute_error=ZERO, status="INSUFFICIENT")
+        probability = self._calibrated_probability(_clip(raw, Decimal("0.05"), Decimal("0.85")), calibration)
+        strength = sum((weight * abs(factor) for factor, weight in weights), ZERO)
+        confidence = int(_clip(Decimal("0.45") * strength + Decimal("0.55") * max(ZERO, side * trend)) * Decimal("100"))
+        opportunity_score = int(_clip(Decimal("0.5") + side * trend * Decimal("0.35") + side * flow_bias * Decimal("0.15")) * Decimal("100"))
+        expected_value = probability * reward_to_risk - (ONE - probability) - Decimal("0.08")
+        probability_floor = Decimal("0.62") if profile == "COMMODITY" else Decimal("0.63")
+        confidence_floor = Decimal("66") if profile == "COMMODITY" else Decimal("68")
+        rr_floor = Decimal("1.50") if profile == "COMMODITY" else Decimal("1.60")
+        gates = [
+            DecisionGate(key="tp_before_sl", label="TP 先于 SL 概率", passed=probability >= probability_floor, observed=probability, required=probability_floor),
+            DecisionGate(key="expected_value", label="净期望值", passed=expected_value > ZERO, observed=expected_value, required=ZERO),
+            DecisionGate(key="reward_to_risk", label="盈亏比", passed=reward_to_risk >= rr_floor, observed=reward_to_risk, required=rr_floor),
+            DecisionGate(key="evidence_conflict", label="证据冲突上限", passed=conflict < Decimal("0.30"), observed=conflict, required=Decimal("0.30")),
+            DecisionGate(key="confidence", label=f"{profile} 结构置信度", passed=Decimal(confidence) >= confidence_floor, observed=Decimal(confidence), required=confidence_floor),
+            DecisionGate(key="cross_exchange", label="独立价格确认", passed=snapshot.peer_confirmations >= 2, observed=Decimal(snapshot.peer_confirmations), required=Decimal("2")),
+            DecisionGate(key="historical_calibration", label="历史校准未降级", passed=calibration.status != "DEGRADED", observed=calibration.absolute_error, required=Decimal("0.12"),),
+            *extra,
+        ]
+        return SignalAnalysis(
+            opportunity_score=opportunity_score, confidence=confidence,
+            p_tp_before_sl=probability.quantize(Decimal("0.001")), expected_value=expected_value.quantize(Decimal("0.001")),
+            evidence_conflict=_clip(conflict).quantize(Decimal("0.001")), is_tradeable=all(gate.passed for gate in gates),
+            market_regime=market_regime, signal_type=signal_type, smart_money_bias=smart_bias,
+            derivatives_bias=_bias(side * derivatives), order_flow_bias=_bias(side * flow_bias),
+            news_bias="UNAVAILABLE", asset_profile=profile, model_version=model_version,
+            narrative_bias="UNAVAILABLE", narrative_score=ZERO, narrative_sources=(), calibration=calibration,
+            decision=SignalDecision(outcome="TRADE" if all(gate.passed for gate in gates) else "NO_TRADE", gates=tuple(gates)),
         )
 
     @staticmethod
